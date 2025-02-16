@@ -2,7 +2,7 @@ import logging
 from datetime import datetime as dt
 
 import streamlit as st
-from langchain_community.callbacks.openai_info import OpenAICallbackHandler
+from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langchain_openai import ChatOpenAI
 
 from modules.helpers import (
@@ -118,15 +118,27 @@ if is_api_key_set() and is_api_key_valid(st.session_state.openai_api_key):
         if summarize_button:
             try:
                 transcript = fetch_youtube_transcript(url_input)
-                cb = OpenAICallbackHandler()
-                llm = ChatOpenAI(
-                    api_key=st.session_state.openai_api_key,
-                    temperature=st.session_state.temperature,
-                    model=st.session_state.model,
-                    top_p=st.session_state.top_p,
-                    callbacks=[cb],
-                    max_tokens=2048,
-                )
+                # cb = OpenAICallbackHandler()
+
+                # Use ChatNVIDIA if selected
+                if st.session_state.api_provider == "nvidia":
+                    llm = ChatNVIDIA(
+                        api_key=st.session_state.nvidia_api_key,
+                        model=st.session_state.model,
+                        temperature=st.session_state.temperature,
+                        top_p=st.session_state.top_p,
+                        # max_tokens is not directly supported in the constructor
+                    )
+                else:  # Use ChatOpenAI
+                    llm = ChatOpenAI(
+                        api_key=st.session_state.openai_api_key,
+                        temperature=st.session_state.temperature,
+                        model=st.session_state.model,
+                        top_p=st.session_state.top_p,
+                        # callbacks=[cb],
+                        max_tokens=2048,
+                    )
+
                 with st.spinner("Summarizing video :gear: Hang on..."):
                     if custom_prompt:
                         resp = get_transcript_summary(
@@ -144,9 +156,7 @@ if is_api_key_set() and is_api_key_valid(st.session_state.openai_api_key):
                 # button for saving summary to library
                 st.button(label="Save summary to library", on_click=save_summary_to_lib)
 
-                st.caption(
-                    f"The estimated cost for the request is: {cb.total_cost:.4f}$"
-                )
+                # st.caption(f"The estimated cost for the request is: {cb.total_cost:.4f}$")
                 if st.session_state.save_responses:
                     save_response_as_file(
                         dir_name=f"./responses/{vid_metadata['channel']}",

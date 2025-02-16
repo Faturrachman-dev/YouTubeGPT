@@ -8,6 +8,7 @@ from chromadb import Collection
 from chromadb.config import Settings
 from langchain_chroma import Chroma
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
 from modules.helpers import (
     get_available_models,
@@ -73,166 +74,91 @@ SQL_DB.create_tables([Video, Transcript, LibraryEntry], safe=True)
 chroma_connection_established = False
 chroma_settings = Settings(allow_reset=True, anonymized_telemetry=False)
 collection: None | Collection = None
-try:
-    chroma_client = chromadb.HttpClient(
-        host="chromadb" if is_environment_prod() else "localhost",
-        settings=chroma_settings,
-    )
-except Exception as e:
-    logging.error(e)
-    st.warning(
-        "Connection to ChromaDB could not be established! You need to have a ChromaDB instance up and running locally on port 8000!"
-    )
-else:
-    chroma_connection_established = True
-# --- end ---
 
-
-def is_video_selected():
-    return True if selected_video_title else False
-
-
-@st.dialog("Action successful")
-def refresh_page(message: str):
-    st.info(message)
-    refresh_page_button = st.button("Refresh page")
-    if refresh_page_button:
-        st.session_state.url_input = ""
-        st.rerun()
-
-
-# variable for holding the Video object
-saved_video: None | Video = None
-
-
-def save_response_to_lib():
-    """Wrapper func for saving responses to the library."""
-    try:
-        save_library_entry(
-            entry_type="A",
-            question_text=st.session_state.user_prompt,
-            response_text=st.session_state.response,
-            video=saved_video,
-        )
-    except Exception as e:
-        st.error("Saving failed! If you are a developer, see logs for details!")
-        logging.error("Error when saving library entry: %s", e)
+if is_api_key_set():
+    if not is_api_key_valid(st.session_state.openai_api_key):
+        st.error("OpenAI API Key is invalid.")
     else:
-        st.success("Saved answer to library successfully!")
-
-
-if (
-    is_api_key_set()
-    and is_api_key_valid(st.session_state.openai_api_key)
-    and chroma_connection_established
-):
-    # --- rest of the sidebar, which requires a set api key ---
     display_model_settings_sidebar()
-    st.sidebar.info(
-        "Choose **text-embedding-3-large** if your video is **not** in English!"
-    )
-    selected_embeddings_model = st.sidebar.selectbox(
-        label="Select an embedding model",
-        options=get_available_models(
-            api_key=st.session_state.openai_api_key, model_type="embeddings"
-        ),
-        key="embeddings_model",
-        help=get_default_config_value(key_path="help_texts.embeddings"),
-    )
-    # --- end ---
 
-    # --- initialize OpenAI models ---
-    openai_chat_model = ChatOpenAI(
-        api_key=st.session_state.openai_api_key,
-        temperature=st.session_state.temperature,
-        model=st.session_state.model,
-        top_p=st.session_state.top_p,
-        max_tokens=2048,
-    )
-    openai_embedding_model = OpenAIEmbeddings(
-        api_key=st.session_state.openai_api_key,
-        model=st.session_state.embeddings_model,
-    )
-    # --- end ---
-
-    # fetch all saved videos from SQLite
-    saved_videos = Video.select()
-
-    # create columns
-    col1, col2 = st.columns([0.5, 0.5], gap="large")
-
-    with col1:
-        selected_video_title = st.selectbox(
-            label="Select from already processed videos",
-            placeholder="Choose a video",
-            # only videos with an associated transcript can be selected
-            options=[
-                video.title for video in saved_videos if video.transcripts.count() != 0
-            ],
-            index=None,
-            key="selected_video",
-            help=get_default_config_value("help_texts.selected_video"),
-        )
-        url_input = display_video_url_input(
-            label="Or enter the URL of a new video:", disabled=is_video_selected()
-        )
-
-        if is_video_selected():
-            saved_video = Video.get(Video.title == selected_video_title)
-
-        process_button = st.button(
-            label="Process",
-            key="process_button",
-            help="This will process the transcript to enable Q&A on the contents.",
-            disabled=is_video_selected(),
-        )
-
-        if saved_video:
-            display_yt_video_container(
-                video_title=saved_video.title,
-                channel=saved_video.channel,
-                url=saved_video.link,
+        # select-box for choosing the video
+        videos = Video.select().order_by(Video.saved_on.desc())
+        if videos.exists():
+            selected_video = st.selectbox(
+                label="Select a video",
+                options=videos,
+                format_func=lambda x: f"{x.title} ({x.channel})",
+                placeholder="Select a video from the list",
             )
-            delete_video_button = st.button(
-                label="Delete",
-                key="delete_video_button",
-                help="Deletes selected video. You won't be able to Q&A this video, unless you process it again!",
-            )
-            collection = chroma_client.get_collection(
-                name=saved_video.chroma_collection_name(),
-            )
-            if delete_video_button:
+            # delete button
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button(
+                    label="Delete video",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=not selected_video,
+                ):
+                    with st.spinner("Deleting video..."):
+                        try:
+                            delete_video(selected_video.yt_video_id)
+                        except Exception as e:
+                            logging.error("Error while deleting video: %s", e)
+                            st.error("An error occurred while deleting the video.")
+                        else:
+                            st.cache_data.clear()
+                            st.rerun()
+
+            # get the Chroma collection for the selected video
+            if selected_video:
+                with col2:
+                    # select-box for choosing the chunk size
+                    chunk_size = st.selectbox(
+                        label="Select chunk size",
+                        options=CHUNK_SIZE_TO_K_MAPPING.keys(),
+                        index=1,  # 512 is default
+                        help=get_default_config_value("help_texts.chunk_size"),
+                    )
                 try:
-                    chroma_client.delete_collection(
-                        name=saved_video.chroma_collection_name(),
+                    openai_embedding_model = OpenAIEmbeddings(
+                        api_key=st.session_state.openai_api_key
                     )
-                    delete_video(
-                        video_title=selected_video_title,
+                    chroma_client = chromadb.Client(settings=chroma_settings)
+                    # try to get an existing collection
+                    collection = chroma_client.get_collection(
+                        name=selected_video.yt_video_id
+                        + "_"
+                        + str(chunk_size)  # collection name contains video-id and chunk size
                     )
+                    chroma_connection_established = True
                 except Exception as e:
-                    logging.error("An unexpected error occurred %s", str(e))
-                    st.error(GENERAL_ERROR_MESSAGE)
-                finally:
-                    collection = None
-                    refresh_page(
-                        message=f"The video '{selected_video_title}' was deleted!"
+                    logging.error("Could not get collection: %s", e)
+                    st.error(
+                        "Could not get collection. It seems like no collection with the selected chunk size exists for this video. Please go to 'Summary' and choose the same chunk size to create the collection."
                     )
 
-        with st.expander("Advanced options"):
-            chunk_size = st.radio(
-                label="Chunk size",
-                key="chunk_size",
-                options=[128, 256, 512, 1024],
-                index=2,
-                help=get_default_config_value("help_texts.chunk_size"),
-                disabled=is_video_selected(),
+        else:
+            st.info(
+                "No videos processed yet. Go to the 'Summary' page and enter a YouTube video URL."
             )
-            transcription_checkbox = st.checkbox(
-                label="Enable advanced transcription",
-                key="preprocessing_checkbox",
-                help=get_default_config_value("help_texts.preprocess_checkbox"),
-                disabled=is_video_selected(),
+
+        # --- user input ---
+        url_input = display_video_url_input(disabled=chroma_connection_established)
+
+        col1, col2 = st.columns([0.3, 0.7])
+        with col1:
+            process_button = st.button(
+                label="Process video",
+                use_container_width=True,
+                disabled=not url_input or chroma_connection_established,
             )
+
+
+        def refresh_page(message: str):
+            st.session_state.video_url = ""
+            st.info(message)
+            # st.rerun() # Removed, causes issues.  Manual refresh is better.
+
 
         if process_button:
             with st.spinner(
@@ -262,11 +188,12 @@ if (
                         video=saved_video,
                         original_token_num=num_tokens_from_string(
                             string=original_transcript,
-                            model=openai_chat_model.model_name,
+                            model=st.session_state.model, # Use selected model
                         ),
                     )
 
                     # 4. get an already existing or create a new collection in ChromaDB
+                    selected_embeddings_model = "text-embedding-3-small"  # For now, keep OpenAI embeddings
                     collection = chroma_client.get_or_create_collection(
                         name=randomname.get_name(),
                         metadata={
@@ -276,44 +203,33 @@ if (
                         },
                     )
 
-                    # 5. create excerpts. Either
-                    #   - from original transcript
-                    #   - or from whisper transcription if transcription checkbox is checked
-                    if transcription_checkbox:
-                        download = download_mp3(
-                            video_id=saved_video.yt_video_id,
-                            download_folder_path="data/audio",
-                        )
-                        whisper_transcript = generate_transcript(file_path=download)
-                        transcript_excerpts = split_text_recursively(
-                            transcript_text=whisper_transcript,
-                            chunk_size=chunk_size,
-                            len_func="tokens",
-                        )
-                    else:
+                    # 5. split the transcript into chunks
                         transcript_excerpts = split_text_recursively(
                             transcript_text=original_transcript,
-                            chunk_size=chunk_size,
+                        chunk_size=CHUNK_SIZE_FOR_UNPROCESSED_TRANSCRIPT,
+                        chunk_overlap=32,
                             len_func="tokens",
                         )
 
-                    # 6. embed/index transcript excerpts
-                    Transcript.update(
-                        {
-                            Transcript.preprocessed: transcription_checkbox,
-                            Transcript.chunk_size: chunk_size,
-                            Transcript.chroma_collection_id: collection.id,
-                            Transcript.chroma_collection_name: collection.name,
-                        }
-                    ).where(Transcript.video == saved_video).execute()
+                    # 6. embed the chunks and add them to the collection
                     embed_excerpts(
+                        transcript_excerpts=transcript_excerpts,
                         collection=collection,
-                        excerpts=transcript_excerpts,
-                        embeddings=openai_embedding_model,
+                        openai_embedding_model=openai_embedding_model,
+                        chunk_size=chunk_size,
                     )
+
+                    # 7. update transcript in db
+                    saved_transcript.processed_token_num = sum(
+                        num_tokens_from_string(
+                            string=e.page_content, model=st.session_state.model # Use selected model
+                        )
+                        for e in transcript_excerpts
+                    )
+                    saved_transcript.save()
+
                 except InvalidUrlException as e:
                     st.error(e.message)
-                    e.log_error()
                 except NoTranscriptReceivedException as e:
                     st.error(e.message)
                     e.log_error()
@@ -361,9 +277,27 @@ if (
                                 collection.metadata["chunk_size"]
                             ),
                         )
+
+                        # Use ChatNVIDIA if selected
+                        if st.session_state.api_provider == "nvidia":
+                            chat_llm = ChatNVIDIA(
+                                api_key=st.session_state.nvidia_api_key,
+                                model=st.session_state.model,
+                                temperature=st.session_state.temperature,
+                                top_p=st.session_state.top_p,
+                            )
+                        else:  # Use ChatOpenAI
+                            chat_llm = ChatOpenAI(
+                                api_key=st.session_state.openai_api_key,
+                                temperature=st.session_state.temperature,
+                                model=st.session_state.model,
+                                top_p=st.session_state.top_p,
+                                # max_tokens=1024,  # Removed, handled in generate_response
+                            )
+
                         response = generate_response(
                             question=prompt,
-                            llm=openai_chat_model,
+                            llm=chat_llm,  # Use the selected LLM
                             relevant_docs=relevant_docs,
                         )
                         st.session_state.response = response
@@ -385,3 +319,34 @@ if (
                             for d in relevant_docs:
                                 st.write(d.page_content)
                                 st.divider()
+
+
+def save_response_to_lib():
+    """Saves the generated response (question and answer) to the database."""
+    try:
+        video_id = extract_youtube_video_id(st.session_state.url_input)
+        video_metadata = get_video_metadata(st.session_state.url_input)
+        # save video to db if not already saved
+        video, _ = Video.get_or_create(
+            yt_video_id=video_id,
+            defaults={
+                "link": st.session_state.url_input,
+                "title": video_metadata["name"],
+                "channel": video_metadata["channel"],
+                "saved_on": dt.now(),
+            },
+        )
+        # save response to db
+        library_entry = LibraryEntry.create(
+            video=video,
+            summary=st.session_state.response,
+            question=st.session_state.user_prompt,
+            type="chat",
+            added_on=dt.now(),
+        )
+        st.success(
+            f"Response to '{library_entry.question}' for video '{library_entry.video.title}' saved to library! :floppy_disk:"
+        )
+    except Exception as e:
+        logging.error("An error occurred while saving to library: %s", e)
+        st.error("Saving to library failed :cry: Please try again.")

@@ -47,6 +47,7 @@ services:
       # replace with your OpenAI API key or the name of the environment
       # variable that stores it on your PC 
       - OPENAI_API_KEY=${OPENAI_YTAI_API_KEY}
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY}
     ports:
       - "8501:8501"
     networks:

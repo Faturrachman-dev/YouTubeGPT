@@ -11,13 +11,17 @@ GENERAL_ERROR_MESSAGE = "An unexpected error occurred. If you are a developer an
 def display_api_key_warning():
     """Checks whether an API key is provided and displays warning if not."""
     if not is_api_key_set():
-        st.warning(
+        st.sidebar.warning(
             """:warning: It seems you haven't provided an API key yet. Make sure to do so by providing it in the settings (sidebar) 
             or as an environment variable according to the [instructions](https://github.com/sudoleg/ytai?tab=readme-ov-file#installation--usage).
             Also, make sure that you have **active credit grants** and that they are not expired! You can check it [here](https://platform.openai.com/usage),
             it should be on the right side. 
             """
         )
+    elif "nvidia_api_key" in st.session_state and not is_api_key_valid(
+        st.session_state.nvidia_api_key
+    ):
+        st.sidebar.warning("NVIDIA API key seems to be invalid.")
     elif "openai_api_key" in st.session_state and not is_api_key_valid(
         st.session_state.openai_api_key
     ):
@@ -29,6 +33,8 @@ def set_api_key_in_session_state():
     Otherwise an input field for the API key is diplayed.
     """
     OPENAI_API_KEY = getenv("OPENAI_API_KEY")
+    NVIDIA_API_KEY = getenv("NVIDIA_API_KEY")
+
     if not OPENAI_API_KEY:
         st.sidebar.text_input(
             "Enter your OpenAI API key",
@@ -37,6 +43,15 @@ def set_api_key_in_session_state():
         )
     else:
         st.session_state.openai_api_key = OPENAI_API_KEY
+
+    if not NVIDIA_API_KEY:
+        st.sidebar.text_input(
+            "Enter your NVIDIA API key",
+            key="nvidia_api_key",
+            type="password",
+        )
+    else:
+        st.session_state.nvidia_api_key = NVIDIA_API_KEY
 
 
 def is_temperature_and_top_p_altered() -> bool:
@@ -56,6 +71,15 @@ def display_model_settings_sidebar():
     """
     if "model" not in st.session_state:
         st.session_state.model = get_default_config_value("default_model.gpt")
+    if "api_provider" not in st.session_state:
+        st.session_state.api_provider = "openai"
+
+    api_provider = st.sidebar.selectbox(
+        label="Select API Provider",
+        options=["openai", "nvidia"],
+        key="api_provider",
+    )
+    st.session_state.api_provider = api_provider
 
     with st.sidebar:
         st.header("Model settings")
@@ -128,3 +152,26 @@ def display_nav_menu():
     st.sidebar.page_link(page="pages/summary.py", label="Summary")
     st.sidebar.page_link(page="pages/chat.py", label="Chat")
     st.sidebar.page_link(page="pages/library.py", label="Library")
+
+
+def get_available_models(model_type: str, api_key: str) -> list:
+    """Gets available models based on the model type and API key."""
+    if model_type == "nvidia":
+        # In a real implementation, you might check the API key validity here
+        # and return an empty list if it's invalid.
+        return get_default_config_value("available_models.nvidia")
+    elif model_type == "gpts":
+        # Existing logic for OpenAI models
+        try:
+            client = OpenAI(api_key=api_key)
+            models = client.models.list()
+            available_models = [
+                model.id
+                for model in models
+                if "gpt" in model.id and model.id in get_default_config_value("available_models.gpts")
+            ]
+            return available_models
+        except Exception:
+            return []
+    else:
+        return []

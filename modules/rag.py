@@ -3,13 +3,14 @@ import uuid
 from typing import List, Literal
 
 from chromadb import Collection
-from langchain_core.language_models import BaseChatModel
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_nvidia_ai_endpoints import ChatNVIDIA
+from langchain_openai import ChatOpenAI
 
 from modules.helpers import num_tokens_from_string
 
@@ -66,22 +67,33 @@ def split_text_recursively(
     return splits
 
 
-def format_docs_for_context(docs):
+def format_docs_for_context(docs: List[Document]) -> str:
+    """Formats a list of documents into a single string for the context."""
     return "\n\n---\n\n".join(doc.page_content for doc in docs)
 
 
 def embed_excerpts(
-    collection: Collection, excerpts: List[Document], embeddings: Embeddings
+    transcript_excerpts,
+    collection: Collection,
+    openai_embedding_model: Embeddings,
+    chunk_size: int,
 ):
-    """If there are no embeddings in the database, each document in the list is embedded in the provided collection."""
-    if collection.count() <= 0:
-        for e in excerpts:
-            response = embeddings.embed_query(e.page_content)
-            collection.add(
-                ids=[str(uuid.uuid1())],
-                embeddings=[response],
-                documents=[e.page_content],
-            )
+    """Embeds transcript excerpts and adds them to the Chroma collection."""
+    for excerpt in transcript_excerpts:
+        # create metadata for each excerpt
+        metadata = {
+            "id": str(uuid.uuid4()),
+            "chunk_size": chunk_size,
+            "content": excerpt.page_content,
+        }
+
+        # add excerpt and metadata to Chroma collection
+        collection.add(
+            ids=[metadata["id"]],
+            documents=[excerpt.page_content],
+            metadatas=[metadata],
+        )
+    logging.info("Added %d excerpts to Chroma collection.", len(transcript_excerpts))
 
 
 def find_relevant_documents(query: str, db: Chroma, k: int = 3):
@@ -98,10 +110,10 @@ def find_relevant_documents(query: str, db: Chroma, k: int = 3):
     """
 
     retriever = db.as_retriever(search_kwargs={"k": k})
-    return retriever.invoke(input=query)
+    return retriever.get_relevant_documents(query=query)
 
 
-def generate_response(question: str, llm: BaseChatModel, relevant_docs: List[Document]):
+def generate_response(question: str, llm: ChatNVIDIA | ChatOpenAI, relevant_docs: List[Document]) -> str:
     formatted_input = rag_user_prompt.format(
         question=question, context=format_docs_for_context(relevant_docs)
     )

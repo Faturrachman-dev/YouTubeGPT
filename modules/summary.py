@@ -2,6 +2,7 @@ import logging
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langchain_openai import ChatOpenAI
 
 from .helpers import num_tokens_from_string
@@ -28,6 +29,11 @@ CONTEXT_WINDOWS = {
     "gpt-4o-mini": {"total": 128000, "output": 16000},
 }
 
+# Placeholder for NVIDIA context windows.  REPLACE with actual values.
+NVIDIA_CONTEXT_WINDOWS = {
+    "meta/llama-3.1-405b-instruct": {"total": 4096, "output": 4096},  # Example!
+}
+
 
 class TranscriptTooLongForModelException(Exception):
     """Raised when the length of the transcript exceeds the context window of a language model."""
@@ -42,7 +48,7 @@ class TranscriptTooLongForModelException(Exception):
         logging.error("Transcript too long for %s.", self.model_name, exc_info=True)
 
 
-def get_transcript_summary(transcript_text: str, llm: ChatOpenAI, **kwargs):
+def get_transcript_summary(transcript_text: str, llm: ChatNVIDIA | ChatOpenAI, **kwargs):
     """
     Generates a summary from a video transcript using a language model.
 
@@ -85,13 +91,19 @@ def get_transcript_summary(transcript_text: str, llm: ChatOpenAI, **kwargs):
             """
 
     # if the number of tokens in the transcript (plus the number of tokens in the prompt) exeed the model's context window, an exception is raised
-    if num_tokens_from_string(
-        string=transcript_text, model=llm.model_name
-    ) > CONTEXT_WINDOWS[llm.model_name]["total"] - num_tokens_from_string(
-        string=user_prompt, model=llm.model_name
-    ):
+    if isinstance(llm, ChatNVIDIA):
+        # Use NVIDIA context windows
+        max_tokens = NVIDIA_CONTEXT_WINDOWS.get(llm.model, {}).get("total", 4096)  # Default to 4096 if not found
+        model_name_for_tokens = llm.model # Use NVIDIA model name directly
+    else:  # isinstance(llm, ChatOpenAI)
+        max_tokens = CONTEXT_WINDOWS[llm.model_name]["total"] - num_tokens_from_string(
+            string=user_prompt, model=llm.model_name
+        )
+        model_name_for_tokens = llm.model_name
+
+    if num_tokens_from_string(string=transcript_text, model=model_name_for_tokens) > max_tokens:
         raise TranscriptTooLongForModelException(
-            message=f"Your transcript exceeds the context window of the chosen model ({llm.model_name}), which is {CONTEXT_WINDOWS[llm.model_name]['total']} tokens. "
+            message=f"Your transcript exceeds the context window of the chosen model ({llm.model_name}), which is {max_tokens} tokens. "
             "Consider the following options:\n"
             "1. Choose another model with larger context window (such as gpt-4o).\n"
             "2. Use the 'Chat' feature to ask specific questions about the video. There you won't be limited by the number of tokens.\n\n"

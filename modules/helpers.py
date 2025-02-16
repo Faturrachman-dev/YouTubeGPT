@@ -14,6 +14,8 @@ def is_api_key_set() -> bool:
     """Checks whether the OpenAI API key is set in streamlit's session state or as environment variable."""
     if os.getenv("OPENAI_API_KEY") or "openai_api_key" in st.session_state:
         return True
+    if os.getenv("NVIDIA_API_KEY") or "nvidia_api_key" in st.session_state:
+        return True
     return False
 
 
