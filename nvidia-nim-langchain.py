@@ -1,8 +1,13 @@
+import os
+from dotenv import load_dotenv
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
+
+# Load environment variables from .env file
+load_dotenv()
 
 client = ChatNVIDIA(
   model="meta/llama-3.1-405b-instruct",
-  api_key="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", 
+  api_key=os.getenv("NVIDIA_API_KEY"),
   temperature=0.2,
   top_p=0.7,
   max_tokens=1024,

@@ -15,6 +15,7 @@ services:
     environment:
       - IS_PERSISTENT=TRUE
       - ALLOW_RESET=TRUE
+      - NVIDIA_API_KEY=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
     # possible values are: "no", always", "on-failure", "unless-stopped"
     #restart: unless-stopped 
     ports:
@@ -40,14 +41,9 @@ services:
       # replace the part before : with the path
       # to the directory where you would like
       # the summaries to be saved
-      - /Users/Shared/yt-summaries:/app/responses
+      - E:\Documents\yt-summaries:/app/responses
       # leave as it is
       - ./data:/app/data
-    environment:
-      # replace with your OpenAI API key or the name of the environment
-      # variable that stores it on your PC 
-      - OPENAI_API_KEY=${OPENAI_YTAI_API_KEY}
-      - NVIDIA_API_KEY=${NVIDIA_API_KEY}
     ports:
       - "8501:8501"
     networks:
