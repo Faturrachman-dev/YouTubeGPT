@@ -5,98 +5,49 @@ import re
 from pathlib import Path
 from typing import List, Literal
 
-import openai
 import streamlit as st
 import tiktoken
 
 
 def is_api_key_set() -> bool:
-    """Checks whether the OpenAI API key is set in streamlit's session state or as environment variable."""
-    if os.getenv("OPENAI_API_KEY") or "openai_api_key" in st.session_state:
-        return True
-    if os.getenv("NVIDIA_API_KEY") or "nvidia_api_key" in st.session_state:
-        return True
-    return False
+    """Checks whether the NVIDIA API key is set in streamlit's session state or as environment variable."""
+    return bool(os.getenv("NVIDIA_API_KEY") or "nvidia_api_key" in st.session_state)
 
 
 @st.cache_data
-def is_api_key_valid(api_key: str):
+def is_api_key_valid(api_key: str) -> bool:
     """
-    Checks the validity of an OpenAI API key.
+    Performs a basic format check for a NVIDIA API key.
 
     Args:
-        api_key (str): The OpenAI API key to be validated.
+        api_key (str): The NVIDIA API key to validate.
 
     Returns:
-        bool: True if the API key is valid, False if the API key is invalid.
+        bool: True if the key format is valid, False otherwise.
     """
-
-    openai.api_key = api_key
-    try:
-        openai.models.list()
-    except openai.AuthenticationError as e:
-        logging.error(
-            "An authentication error occurred when checking API key validity: %s",
-            str(e),
-        )
+    if not api_key.startswith("nvapi-"):
+        logging.error("Invalid NVIDIA API key format - must start with 'nvapi-'")
         return False
-    except Exception as e:
-        logging.error(
-            "An unexpected error occurred when checking API key validity: %s",
-            str(e),
-        )
+    elif len(api_key) < 20:  # Minimum length for NVIDIA keys
+        logging.error("NVIDIA API key seems too short")
         return False
-    else:
-        logging.info("API key validation successful")
-        return True
+    
+    logging.info("NVIDIA API key format validation successful")
+    return True
 
 
-def get_available_models(
-    model_type: Literal["gpts", "embeddings"], api_key: str = ""
-) -> List[str]:
+def get_available_models(model_type: Literal["nvidia", "embeddings"], api_key: str = "") -> List[str]:
     """
-    Retrieve a filtered list of available model IDs from OpenAI's API or environment variables, based on the specified model type.
+    Retrieve available models from config based on the specified type.
 
     Args:
-        model_type (Literal["gpts", "embeddings"]): The type of models to retrieve, such as 'gpts' or 'embeddings'.
-        api_key (str, optional): The API key for authenticating with OpenAI. Defaults to an empty string.
+        model_type (Literal["nvidia", "embeddings"]): The type of models to retrieve
+        api_key (str, optional): Not used for NVIDIA implementation. Defaults to "".
 
     Returns:
-        List[str]: A filtered list of available model IDs matching the specified model type. The list is derived either from the environment variable `AVAILABLE_MODEL_IDS` if set, or from a call to OpenAI's API.
-        If an authentication error or any other exception occurs during the API call, an empty list is returned.
+        List[str]: List of available model IDs for the specified type
     """
-    openai.api_key = api_key
-    selectable_model_ids = list(
-        get_default_config_value(f"available_models.{model_type}")
-    )
-
-    # AVAILABLE_MODEL_IDS env var stores all the model IDs available to the user as a list (separated by a comma)
-    # the env var is set programatically below
-    available_model_ids = os.getenv("AVAILABLE_MODEL_IDS")
-    if available_model_ids:
-        return filter(
-            lambda m: m in available_model_ids.split(","), selectable_model_ids
-        )
-
-    try:
-        available_model_ids: list = [model.id for model in openai.models.list()]
-    except openai.AuthenticationError as e:
-        logging.error(
-            "An authentication error occurred when fetching available models: %s",
-            str(e),
-        )
-        return []
-    except Exception as e:
-        logging.error(
-            "An unexpected error occurred when fetching available models: %s",
-            str(e),
-        )
-        return []
-    else:
-        # set the AVAILABLE_MODEL_IDS env var, so that the list of available models
-        # doesn't have to be fetched every time
-        os.environ["AVAILABLE_MODEL_IDS"] = ",".join(available_model_ids)
-        return filter(lambda m: m in available_model_ids, selectable_model_ids)
+    return list(get_default_config_value(f"available_models.{model_type}"))
 
 
 def get_default_config_value(
@@ -104,30 +55,23 @@ def get_default_config_value(
     config_file_path: str = "./config.json",
 ) -> str:
     """
-    Retrieves a configuration value from a JSON file using a specified key path.
+    Retrieves a configuration value from the JSON config file.
 
     Args:
-        config_file_path (str): A string representing the relative path to the JSON config file.
-
-        key_path (str): A string representing the path to the desired value within the nested JSON structure,
-                        with each level separated by a '.' (e.g., "level1.level2.key").
-
+        key_path (str): Path to the desired value (e.g., "default_model.nvidia")
+        config_file_path (str, optional): Path to config file. Defaults to "./config.json".
 
     Returns:
-        The value corresponding to the key path within the configuration file. If the key path does not exist,
-        a KeyError is raised.
+        str: The configuration value
 
     Raises:
-        KeyError: If the specified key path is not found in the configuration.
+        KeyError: If the key path doesn't exist in the configuration
     """
     with open(config_file_path, "r", encoding="utf-8") as config_file:
         config = json.load(config_file)
-
-        keys = key_path.split(".")
         value = config
-        for key in keys:
-            value = value[key]  # Navigate through each level
-
+        for key in key_path.split("."):
+            value = value[key]
         return value
 
 
@@ -210,18 +154,22 @@ def get_preffered_languages():
     return ["en-US", "en", "de"]
 
 
-def num_tokens_from_string(string: str, model: str = "gpt-4o-mini") -> int:
+def num_tokens_from_string(string: str, model: str) -> int:
     """
     Returns the number of tokens in a text string.
 
     Args:
-        string (str): The string to count tokens in.
-        model (str): Name of the model. Default is 'gpt-4o-mini'
+        string (str): The text to tokenize
+        model (str): Model name for tokenization
 
-    See https://cookbook.openai.com/examples/how_to_count_tokens_with_tiktoken
+    Returns:
+        int: Number of tokens
     """
-    encoding_name = tiktoken.encoding_name_for_model(model_name=model)
-    encoding = tiktoken.get_encoding(encoding_name)
+    try:
+        encoding = tiktoken.encoding_for_model(model)
+    except KeyError:
+        # Fallback for models not in tiktoken
+        encoding = tiktoken.get_encoding("cl100k_base")
     return len(encoding.encode(string))
 
 
@@ -233,3 +181,16 @@ def is_environment_prod():
     if os.getenv("ENVIRONMENT") == "production":
         return True
     return False
+
+
+def save_to_file(content: str, filepath: str) -> None:
+    """
+    Saves content to a file, creating directories if needed.
+
+    Args:
+        content (str): Content to save
+        filepath (str): Path to save the file
+    """
+    path = Path(filepath)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")

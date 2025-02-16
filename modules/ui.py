@@ -12,37 +12,17 @@ def display_api_key_warning():
     """Checks whether an API key is provided and displays warning if not."""
     if not is_api_key_set():
         st.sidebar.warning(
-            """:warning: It seems you haven't provided an API key yet. Make sure to do so by providing it in the settings (sidebar) 
-            or as an environment variable according to the [instructions](https://github.com/sudoleg/ytai?tab=readme-ov-file#installation--usage).
-            Also, make sure that you have **active credit grants** and that they are not expired! You can check it [here](https://platform.openai.com/usage),
-            it should be on the right side. 
-            """
+            "Please provide your NVIDIA API key in the settings (sidebar) or as an environment variable (`NVIDIA_API_KEY`)."
         )
-    elif "nvidia_api_key" in st.session_state and not is_api_key_valid(
-        st.session_state.nvidia_api_key
-    ):
+    elif "nvidia_api_key" in st.session_state and not is_api_key_valid(st.session_state.nvidia_api_key):
         st.sidebar.warning("NVIDIA API key seems to be invalid.")
-    elif "openai_api_key" in st.session_state and not is_api_key_valid(
-        st.session_state.openai_api_key
-    ):
-        st.warning("API key seems to be invalid.")
 
 
 def set_api_key_in_session_state():
-    """If the env-var OPENAI_API_KEY is set, it's value is assigned to openai_api_key property in streamlit's session state.
-    Otherwise an input field for the API key is diplayed.
+    """If the env-var NVIDIA_API_KEY is set, its value is assigned to nvidia_api_key property in streamlit's session state.
+    Otherwise an input field for the API key is displayed.
     """
-    OPENAI_API_KEY = getenv("OPENAI_API_KEY")
     NVIDIA_API_KEY = getenv("NVIDIA_API_KEY")
-
-    if not OPENAI_API_KEY:
-        st.sidebar.text_input(
-            "Enter your OpenAI API key",
-            key="openai_api_key",
-            type="password",
-        )
-    else:
-        st.session_state.openai_api_key = OPENAI_API_KEY
 
     if not NVIDIA_API_KEY:
         st.sidebar.text_input(
@@ -55,6 +35,7 @@ def set_api_key_in_session_state():
 
 
 def is_temperature_and_top_p_altered() -> bool:
+    """Check if temperature or top_p have been changed from defaults."""
     if st.session_state.temperature != get_default_config_value(
         "temperature"
     ) and st.session_state.top_p != get_default_config_value("top_p"):
@@ -70,27 +51,20 @@ def display_model_settings_sidebar():
     Thus the selected model can be accessed via st.session_state.model.
     """
     if "model" not in st.session_state:
-        st.session_state.model = get_default_config_value("default_model.gpt")
-    if "api_provider" not in st.session_state:
-        st.session_state.api_provider = "openai"
+        st.session_state.model = get_default_config_value("default_model.nvidia")
 
-    api_provider = st.sidebar.selectbox(
-        label="Select API Provider",
-        options=["openai", "nvidia"],
-        key="api_provider",
-    )
-    st.session_state.api_provider = api_provider
+    # Always use NVIDIA
+    st.session_state.api_provider = "nvidia"
 
     with st.sidebar:
         st.header("Model settings")
         model = st.selectbox(
-            label="Select a large language model",
-            options=get_available_models(
-                model_type="gpts", api_key=st.session_state.openai_api_key
-            ),
+            label="Select NVIDIA model",
+            options=get_available_models(model_type="nvidia"),
             key="model",
             help=get_default_config_value("help_texts.model"),
         )
+
         st.slider(
             label="Adjust temperature",
             min_value=0.0,
@@ -100,6 +74,7 @@ def display_model_settings_sidebar():
             value=get_default_config_value("temperature"),
             help=get_default_config_value("help_texts.temperature"),
         )
+
         st.slider(
             label="Adjust Top P",
             min_value=0.0,
@@ -109,20 +84,17 @@ def display_model_settings_sidebar():
             value=get_default_config_value("top_p"),
             help=get_default_config_value("help_texts.top_p"),
         )
+
         if is_temperature_and_top_p_altered():
             st.warning(
-                "OpenAI generally recommends altering temperature or top_p but not both. See their [API reference](https://platform.openai.com/docs/api-reference/chat/create#chat-create-temperature)"
-            )
-        if model != get_default_config_value("default_model.gpt"):
-            st.warning(
-                """:warning: More advanced models (like gpt-4 and gpt-4o) have better reasoning capabilities and larger context windows. However, they likely won't make
-                a big difference for short videos and simple tasks, like plain summarization. Also, beware of the higher costs of other [flagship models](https://platform.openai.com/docs/models/flagship-models)."""
+                "It's generally recommended to alter temperature or top_p but not both."
             )
 
 
 def display_link_to_repo(view: str = "main"):
+    """Displays a link to the GitHub repository."""
     st.sidebar.write(
-        f"[View the source code]({get_default_config_value(f"github_repo_links.{view}")})"
+        f"[View the source code]({get_default_config_value(f'github_repo_links.{view}')})"
     )
 
 
@@ -139,6 +111,7 @@ def display_video_url_input(
 
 
 def display_yt_video_container(video_title: str, channel: str, url: str):
+    """Displays a YouTube video container with title and channel information."""
     st.subheader(
         f"'{video_title}' from {channel}.",
         divider="gray",
@@ -154,24 +127,8 @@ def display_nav_menu():
     st.sidebar.page_link(page="pages/library.py", label="Library")
 
 
-def get_available_models(model_type: str, api_key: str) -> list:
-    """Gets available models based on the model type and API key."""
+def get_available_models(model_type: str, api_key: str = "") -> list:
+    """Gets available NVIDIA models."""
     if model_type == "nvidia":
-        # In a real implementation, you might check the API key validity here
-        # and return an empty list if it's invalid.
         return get_default_config_value("available_models.nvidia")
-    elif model_type == "gpts":
-        # Existing logic for OpenAI models
-        try:
-            client = OpenAI(api_key=api_key)
-            models = client.models.list()
-            available_models = [
-                model.id
-                for model in models
-                if "gpt" in model.id and model.id in get_default_config_value("available_models.gpts")
-            ]
-            return available_models
-        except Exception:
-            return []
-    else:
-        return []
+    return []

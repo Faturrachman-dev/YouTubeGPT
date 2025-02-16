@@ -7,7 +7,7 @@ import streamlit as st
 from chromadb import Collection
 from chromadb.config import Settings
 from langchain_chroma import Chroma
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
 from modules.helpers import (
@@ -76,10 +76,10 @@ chroma_settings = Settings(allow_reset=True, anonymized_telemetry=False)
 collection: None | Collection = None
 
 if is_api_key_set():
-    if not is_api_key_valid(st.session_state.openai_api_key):
-        st.error("OpenAI API Key is invalid.")
+    if not is_api_key_valid(st.session_state.nvidia_api_key):
+        st.error("NVIDIA API key is invalid.")
     else:
-    display_model_settings_sidebar()
+        display_model_settings_sidebar()
 
         # select-box for choosing the video
         videos = Video.select().order_by(Video.saved_on.desc())
@@ -89,7 +89,9 @@ if is_api_key_set():
                 options=videos,
                 format_func=lambda x: f"{x.title} ({x.channel})",
                 placeholder="Select a video from the list",
+                help=get_default_config_value("help_texts.selected_video"),
             )
+
             # delete button
             col1, col2 = st.columns(2)
             with col1:
@@ -111,118 +113,77 @@ if is_api_key_set():
 
             # get the Chroma collection for the selected video
             if selected_video:
-                with col2:
-                    # select-box for choosing the chunk size
-                    chunk_size = st.selectbox(
-                        label="Select chunk size",
-                        options=CHUNK_SIZE_TO_K_MAPPING.keys(),
-                        index=1,  # 512 is default
-                        help=get_default_config_value("help_texts.chunk_size"),
-                    )
                 try:
-                    openai_embedding_model = OpenAIEmbeddings(
-                        api_key=st.session_state.openai_api_key
-                    )
                     chroma_client = chromadb.Client(settings=chroma_settings)
                     # try to get an existing collection
                     collection = chroma_client.get_collection(
                         name=selected_video.yt_video_id
-                        + "_"
-                        + str(chunk_size)  # collection name contains video-id and chunk size
                     )
                     chroma_connection_established = True
                 except Exception as e:
-                    logging.error("Could not get collection: %s", e)
-                    st.error(
-                        "Could not get collection. It seems like no collection with the selected chunk size exists for this video. Please go to 'Summary' and choose the same chunk size to create the collection."
+                    logging.error(
+                        "An error occurred while connecting to Chroma: %s", e
                     )
-
-        else:
-            st.info(
-                "No videos processed yet. Go to the 'Summary' page and enter a YouTube video URL."
-            )
+                    st.error(
+                        "Could not connect to Chroma. Please try again or process another video."
+                    )
 
         # --- user input ---
         url_input = display_video_url_input(disabled=chroma_connection_established)
 
         col1, col2 = st.columns([0.3, 0.7])
         with col1:
-            process_button = st.button(
-                label="Process video",
-                use_container_width=True,
-                disabled=not url_input or chroma_connection_established,
-            )
-
-
-        def refresh_page(message: str):
-            st.session_state.video_url = ""
-            st.info(message)
-            # st.rerun() # Removed, causes issues.  Manual refresh is better.
-
-
-        if process_button:
-            with st.spinner(
-                text="Preparing your video :gear: This can take a little, hang on..."
-            ):
+            if url_input and not chroma_connection_established:
                 try:
-                    video_metadata = get_video_metadata(url_input)
+                    # 1. get video metadata
+                    vid_metadata = get_video_metadata(url_input)
                     display_yt_video_container(
-                        video_title=video_metadata["name"],
-                        channel=video_metadata["channel"],
+                        video_title=vid_metadata["name"],
+                        channel=vid_metadata["channel"],
                         url=url_input,
                     )
 
-                    # 1. save video in the database
+                    # 2. get transcript
+                    original_transcript = fetch_youtube_transcript(url_input)
+
+                    # 3. save video to db
                     saved_video = Video.create(
                         yt_video_id=extract_youtube_video_id(url_input),
                         link=url_input,
-                        title=video_metadata["name"],
-                        channel=video_metadata["channel"],
+                        title=vid_metadata["name"],
+                        channel=vid_metadata["channel"],
                         saved_on=dt.now(),
                     )
-                    # 2. fetch transcript from youtube
-                    original_transcript = fetch_youtube_transcript(url_input)
 
-                    # 3. save transcript, ormore precisely, information about it, in the database
+                    # 4. save transcript to db
                     saved_transcript = Transcript.create(
                         video=saved_video,
-                        original_token_num=num_tokens_from_string(
-                            string=original_transcript,
-                            model=st.session_state.model, # Use selected model
-                        ),
-                    )
-
-                    # 4. get an already existing or create a new collection in ChromaDB
-                    selected_embeddings_model = "text-embedding-3-small"  # For now, keep OpenAI embeddings
-                    collection = chroma_client.get_or_create_collection(
-                        name=randomname.get_name(),
-                        metadata={
-                            "yt_video_title": saved_video.title,
-                            "chunk_size": chunk_size,
-                            "embeddings_model": selected_embeddings_model,
-                        },
+                        text=original_transcript,
+                        processed_token_num=0,
                     )
 
                     # 5. split the transcript into chunks
-                        transcript_excerpts = split_text_recursively(
-                            transcript_text=original_transcript,
+                    transcript_excerpts = split_text_recursively(
+                        transcript_text=original_transcript,
                         chunk_size=CHUNK_SIZE_FOR_UNPROCESSED_TRANSCRIPT,
                         chunk_overlap=32,
-                            len_func="tokens",
-                        )
+                        len_func="tokens",
+                    )
 
                     # 6. embed the chunks and add them to the collection
                     embed_excerpts(
                         transcript_excerpts=transcript_excerpts,
                         collection=collection,
-                        openai_embedding_model=openai_embedding_model,
+                        openai_embedding_model=OpenAIEmbeddings(
+                            api_key=st.session_state.nvidia_api_key
+                        ),
                         chunk_size=chunk_size,
                     )
 
                     # 7. update transcript in db
                     saved_transcript.processed_token_num = sum(
                         num_tokens_from_string(
-                            string=e.page_content, model=st.session_state.model # Use selected model
+                            string=e.page_content, model=st.session_state.model
                         )
                         for e in transcript_excerpts
                     )
@@ -239,87 +200,73 @@ if is_api_key_set():
                     )
                     st.error(GENERAL_ERROR_MESSAGE)
                 else:
-                    refresh_page(
-                        message="The video has been processed! Please refresh the page and choose it in the select-box above."
+                    st.success(
+                        "The video has been processed! Please refresh the page and choose it in the select-box above."
                     )
+                    st.rerun()
 
-    with col2:
-        if collection and collection.count() > 0:
-            # the users input has to be embedded using the same embeddings model as was used for creating
-            # the embeddings for the transcript excerpts. Here we ensure that the embedding function passed
-            # as argument to the vector store is the same as was used for the embeddings
-            collection_embeddings_model = collection.metadata.get("embeddings_model")
-            if collection_embeddings_model != selected_embeddings_model:
-                openai_embedding_model.model = collection_embeddings_model
+        with col2:
+            if collection and collection.count() > 0:
+                # Initialize vector store with OpenAI embeddings
+                chroma_db = Chroma(
+                    client=chroma_client,
+                    collection_name=collection.name,
+                    embedding_function=OpenAIEmbeddings(
+                        api_key=st.session_state.nvidia_api_key
+                    ),
+                )
 
-            # init vector store
-            chroma_db = Chroma(
-                client=chroma_client,
-                collection_name=collection.name,
-                embedding_function=openai_embedding_model,
-            )
+                with st.expander(label=":information_source: Tips and important notes"):
+                    st.markdown(read_file(".assets/rag_quidelines.md"))
 
-            with st.expander(label=":information_source: Tips and important notes"):
-                st.markdown(read_file(".assets/rag_quidelines.md"))
+                prompt = st.chat_input(
+                    placeholder="Ask a question or provide a topic covered in the video",
+                )
 
-            prompt = st.chat_input(
-                placeholder="Ask a question or provide a topic covered in the video",
-            )
+                if prompt:
+                    st.session_state.user_prompt = prompt
+                    with st.spinner("Generating answer..."):
+                        try:
+                            relevant_docs = find_relevant_documents(
+                                query=prompt,
+                                db=chroma_db,
+                                k=CHUNK_SIZE_TO_K_MAPPING.get(
+                                    collection.metadata["chunk_size"]
+                                ),
+                            )
 
-            if prompt:
-                st.session_state.user_prompt = prompt
-                with st.spinner("Generating answer..."):
-                    try:
-                        relevant_docs = find_relevant_documents(
-                            query=prompt,
-                            db=chroma_db,
-                            k=CHUNK_SIZE_TO_K_MAPPING.get(
-                                collection.metadata["chunk_size"]
-                            ),
-                        )
-
-                        # Use ChatNVIDIA if selected
-                        if st.session_state.api_provider == "nvidia":
+                            # Use ChatNVIDIA
                             chat_llm = ChatNVIDIA(
                                 api_key=st.session_state.nvidia_api_key,
                                 model=st.session_state.model,
                                 temperature=st.session_state.temperature,
                                 top_p=st.session_state.top_p,
                             )
-                        else:  # Use ChatOpenAI
-                            chat_llm = ChatOpenAI(
-                                api_key=st.session_state.openai_api_key,
-                                temperature=st.session_state.temperature,
-                                model=st.session_state.model,
-                                top_p=st.session_state.top_p,
-                                # max_tokens=1024,  # Removed, handled in generate_response
+
+                            response = generate_response(
+                                question=prompt,
+                                llm=chat_llm,
+                                relevant_docs=relevant_docs,
+                            )
+                            st.session_state.response = response
+                            
+                            # Display response and save button
+                            st.markdown(response)
+                            st.button(
+                                label="Save response to library",
+                                on_click=save_response_to_lib,
                             )
 
-                        response = generate_response(
-                            question=prompt,
-                            llm=chat_llm,  # Use the selected LLM
-                            relevant_docs=relevant_docs,
-                        )
-                        st.session_state.response = response
-                    except Exception as e:
-                        logging.error(
-                            "An unexpected error occurred: %s", str(e), exc_info=True
-                        )
-                        st.error(GENERAL_ERROR_MESSAGE)
-                    else:
-                        st.write(st.session_state.response)
-                        st.button(
-                            label="Save this response to your library",
-                            on_click=save_response_to_lib,
-                            help="Unfortunately, the response disappears in this view after saving it to the library. However, it will be visible on the 'Library' page!",
-                        )
-                        with st.expander(
-                            label="Show chunks retrieved from index and provided to the model as context"
-                        ):
-                            for d in relevant_docs:
-                                st.write(d.page_content)
-                                st.divider()
+                        except Exception as e:
+                            logging.error(
+                                "An unexpected error occurred: %s", str(e), exc_info=True
+                            )
+                            st.error(GENERAL_ERROR_MESSAGE)
 
+            else:
+                st.info(
+                    "No videos processed yet. Go to the 'Summary' page and enter a YouTube video URL."
+                )
 
 def save_response_to_lib():
     """Saves the generated response (question and answer) to the database."""

@@ -3,17 +3,18 @@ from datetime import datetime as dt
 
 import streamlit as st
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
-from langchain_openai import ChatOpenAI
 
 from modules.helpers import (
-    extract_youtube_video_id,
     get_default_config_value,
     is_api_key_set,
     is_api_key_valid,
-    save_response_as_file,
+    save_to_file,
 )
-from modules.persistance import SQL_DB, LibraryEntry, Video, save_library_entry
-from modules.summary import TranscriptTooLongForModelException, get_transcript_summary
+from modules.persistance import LibraryEntry, Video, save_library_entry
+from modules.summary import (
+    TranscriptTooLongForModelException,
+    get_transcript_summary,
+)
 from modules.ui import (
     GENERAL_ERROR_MESSAGE,
     display_api_key_warning,
@@ -21,11 +22,13 @@ from modules.ui import (
     display_model_settings_sidebar,
     display_nav_menu,
     display_video_url_input,
+    display_yt_video_container,
     set_api_key_in_session_state,
 )
 from modules.youtube import (
     InvalidUrlException,
     NoTranscriptReceivedException,
+    extract_youtube_video_id,
     fetch_youtube_transcript,
     get_video_metadata,
 )
@@ -74,18 +77,9 @@ def save_summary_to_lib():
         st.success("Saved summary to library successfully!")
 
 
-if is_api_key_set() and is_api_key_valid(st.session_state.openai_api_key):
-
-    # --- rest of the sidebar, which requires an api key to be set ---
+if is_api_key_set() and is_api_key_valid(st.session_state.nvidia_api_key):
     display_model_settings_sidebar()
-    st.sidebar.checkbox(
-        label="Save responses",
-        value=False,
-        help=get_default_config_value(key_path="help_texts.saving_responses"),
-        key="save_responses",
-    )
-    # --- end ---
-
+    
     # define the columns
     col1, col2 = st.columns([0.4, 0.6], gap="large")
 
@@ -100,44 +94,30 @@ if is_api_key_set() and is_api_key_valid(st.session_state.openai_api_key):
         if url_input != "":
             try:
                 vid_metadata = get_video_metadata(url_input)
+                display_yt_video_container(
+                    video_title=vid_metadata["name"],
+                    channel=vid_metadata["channel"],
+                    url=url_input,
+                )
             except InvalidUrlException as e:
                 st.error(e.message)
                 e.log_error()
             except Exception as e:
                 logging.error("An unexpected error occurred %s", str(e))
                 st.error(GENERAL_ERROR_MESSAGE)
-            else:
-                if vid_metadata:
-                    st.subheader(
-                        f"'{vid_metadata['name']}' from {vid_metadata['channel']}.",
-                        divider="gray",
-                    )
-                st.video(url_input)
 
     with col2:
         if summarize_button:
             try:
                 transcript = fetch_youtube_transcript(url_input)
-                # cb = OpenAICallbackHandler()
 
-                # Use ChatNVIDIA if selected
-                if st.session_state.api_provider == "nvidia":
-                    llm = ChatNVIDIA(
-                        api_key=st.session_state.nvidia_api_key,
-                        model=st.session_state.model,
-                        temperature=st.session_state.temperature,
-                        top_p=st.session_state.top_p,
-                        # max_tokens is not directly supported in the constructor
-                    )
-                else:  # Use ChatOpenAI
-                    llm = ChatOpenAI(
-                        api_key=st.session_state.openai_api_key,
-                        temperature=st.session_state.temperature,
-                        model=st.session_state.model,
-                        top_p=st.session_state.top_p,
-                        # callbacks=[cb],
-                        max_tokens=2048,
-                    )
+                # Initialize NVIDIA model
+                llm = ChatNVIDIA(
+                    api_key=st.session_state.nvidia_api_key,
+                    model=st.session_state.model,
+                    temperature=st.session_state.temperature,
+                    top_p=st.session_state.top_p,
+                )
 
                 with st.spinner("Summarizing video :gear: Hang on..."):
                     if custom_prompt:
@@ -148,7 +128,8 @@ if is_api_key_set() and is_api_key_valid(st.session_state.openai_api_key):
                         )
                     else:
                         resp = get_transcript_summary(
-                            transcript_text=transcript, llm=llm
+                            transcript_text=transcript, 
+                            llm=llm
                         )
                     st.session_state.summary = resp
                 st.markdown(st.session_state.summary)
@@ -156,23 +137,10 @@ if is_api_key_set() and is_api_key_valid(st.session_state.openai_api_key):
                 # button for saving summary to library
                 st.button(label="Save summary to library", on_click=save_summary_to_lib)
 
-                # st.caption(f"The estimated cost for the request is: {cb.total_cost:.4f}$")
-                if st.session_state.save_responses:
-                    save_response_as_file(
-                        dir_name=f"./responses/{vid_metadata['channel']}",
-                        filename=f"{vid_metadata['name']}",
-                        file_content=resp,
-                        content_type="markdown",
-                    )
-            except InvalidUrlException as e:
-                st.error(e.message)
-                e.log_error()
-            except NoTranscriptReceivedException as e:
-                st.error(e.message)
-                e.log_error()
             except TranscriptTooLongForModelException as e:
-                display_dialog(e.message)
-                e.log_error()
+                st.error(str(e))
             except Exception as e:
-                logging.error("An unexpected error occurred: %s", str(e), exc_info=True)
+                logging.error(
+                    "An unexpected error occurred: %s", str(e), exc_info=True
+                )
                 st.error(GENERAL_ERROR_MESSAGE)

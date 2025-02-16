@@ -3,113 +3,89 @@ import logging
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
-from langchain_openai import ChatOpenAI
 
 from .helpers import num_tokens_from_string
 
+# NVIDIA-specific context window sizes
+NVIDIA_CONTEXT_WINDOWS = {
+    "meta/llama-3.1-405b-instruct": 4096,
+}
+
 SYSTEM_PROMPT = """You are an expert in processing video transcripts according to user's request. 
-For example this could be summarization, question answering or providing key insights.
+You will receive a transcript of a video and a request from a user. Your task is to process the transcript according to the user's request.
+If no specific request is provided, create a comprehensive summary of the video that captures its main points, key insights, and important details.
 """
 
-prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", SYSTEM_PROMPT),
-        ("user", "{input}"),
-    ]
-)
+DEFAULT_USER_PROMPT = """Please provide a comprehensive summary of the following video transcript. Include:
+1. Main topic and key points
+2. Important details and examples
+3. Any conclusions or takeaways
 
-# info about OpenAI's GPTs context windows: https://platform.openai.com/docs/models
-CONTEXT_WINDOWS = {
-    "gpt-3.5-turbo": {"total": 16385, "output": 4096},
-    "gpt-4": {"total": 8192, "output": 4096},
-    "gpt-4-turbo": {"total": 128000, "output": 4096},
-    # https://community.openai.com/t/gpt-4o-max-tokens-output-response-length/748822
-    "gpt-4o": {"total": 128000, "output": 4096},
-    # https://openai.com/index/gpt-4o-mini-advancing-cost-efficient-intelligence/
-    "gpt-4o-mini": {"total": 128000, "output": 16000},
-}
+Transcript:
+{input}
+"""
 
-# Placeholder for NVIDIA context windows.  REPLACE with actual values.
-NVIDIA_CONTEXT_WINDOWS = {
-    "meta/llama-3.1-405b-instruct": {"total": 4096, "output": 4096},  # Example!
-}
+CUSTOM_USER_PROMPT = """Process the following video transcript according to this request:
+{custom_prompt}
+
+Transcript:
+{input}
+"""
 
 
 class TranscriptTooLongForModelException(Exception):
-    """Raised when the length of the transcript exceeds the context window of a language model."""
+    """Raised when the transcript is too long for the model's context window."""
 
-    def __init__(self, message, model_name: str):
-        self.message = message
-        self.model_name = model_name
+    def __init__(self, transcript_length: int, model_name: str):
+        self.message = (
+            f"The transcript is too long ({transcript_length} tokens) for the model's context window "
+            f"({NVIDIA_CONTEXT_WINDOWS.get(model_name, 4096)} tokens).\n\n"
+            "Consider the following options:\n"
+            "1. Choose another model with a larger context window.\n"
+            "2. Use the 'Chat' feature to ask specific questions about the video. There you won't be limited by the number of tokens."
+        )
         super().__init__(self.message)
 
-    def log_error(self):
-        # Assuming logging is configured globally
-        logging.error("Transcript too long for %s.", self.model_name, exc_info=True)
 
-
-def get_transcript_summary(transcript_text: str, llm: ChatNVIDIA | ChatOpenAI, **kwargs):
+def get_transcript_summary(
+    transcript_text: str,
+    llm: ChatNVIDIA,
+    custom_prompt: str = None,
+) -> str:
     """
-    Generates a summary from a video transcript using a language model.
+    Generates a summary of a video transcript using NVIDIA NIM.
 
     Args:
-        transcript_text (str): The full transcript text of the video.
-        llm (ChatOpenAI): The language model instance to use for generating the summary.
-        **kwargs: Optional keyword arguments.
-            - custom_prompt (str): A custom prompt to replace the default summary request.
-
-    Raises:
-        TranscriptTooLongForModelException: If the transcript exceeds the model's context window.
+        transcript_text (str): The transcript to summarize
+        llm (ChatNVIDIA): The NVIDIA language model instance
+        custom_prompt (str, optional): Custom prompt for specific summary requirements
 
     Returns:
-        str: The summary/answer in markdown format.
+        str: Generated summary
+
+    Raises:
+        TranscriptTooLongForModelException: If transcript length exceeds model's context window
     """
+    # Check transcript length against model's context window
+    context_window = NVIDIA_CONTEXT_WINDOWS.get(llm.model, 4096)
+    transcript_tokens = num_tokens_from_string(transcript_text, llm.model)
 
-    user_prompt = f"""Based on the provided transcript of the video, create a summary that accurately captures the main topics and arguments. The summary should be in whole sentences and contain no more than 300 words.
-        Additionaly, extract key insights from the video for contributing to better understanding, emphasizing the main points and providing actionable advise.
-        Here is the transcript, delimited by ---
-        ---
-        {transcript_text}
-        ---
-        Answer in markdown format strictly adhering to this schema:
+    if transcript_tokens > context_window:
+        raise TranscriptTooLongForModelException(transcript_tokens, llm.model)
 
-        ## <short title for the video, consisting of maximum five words>
-
-        <your summary>
-
-        ## Key insights
-
-        <unnumbered list of key insights>
-        """
-
-    if "custom_prompt" in kwargs:
-        user_prompt = f"""{kwargs['custom_prompt']}
-            Here is the transcript, delimited by ---
-            ---
-            {transcript_text}
-            ---
-            """
-
-    # if the number of tokens in the transcript (plus the number of tokens in the prompt) exeed the model's context window, an exception is raised
-    if isinstance(llm, ChatNVIDIA):
-        # Use NVIDIA context windows
-        max_tokens = NVIDIA_CONTEXT_WINDOWS.get(llm.model, {}).get("total", 4096)  # Default to 4096 if not found
-        model_name_for_tokens = llm.model # Use NVIDIA model name directly
-    else:  # isinstance(llm, ChatOpenAI)
-        max_tokens = CONTEXT_WINDOWS[llm.model_name]["total"] - num_tokens_from_string(
-            string=user_prompt, model=llm.model_name
-        )
-        model_name_for_tokens = llm.model_name
-
-    if num_tokens_from_string(string=transcript_text, model=model_name_for_tokens) > max_tokens:
-        raise TranscriptTooLongForModelException(
-            message=f"Your transcript exceeds the context window of the chosen model ({llm.model_name}), which is {max_tokens} tokens. "
-            "Consider the following options:\n"
-            "1. Choose another model with larger context window (such as gpt-4o).\n"
-            "2. Use the 'Chat' feature to ask specific questions about the video. There you won't be limited by the number of tokens.\n\n"
-            "You can get more information on context windows for different models in the [official OpenAI documentation about models](https://platform.openai.com/docs/models).",
-            model_name=llm.model_name,
-        )
+    # Create prompt template based on whether custom prompt is provided
+    if custom_prompt:
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", SYSTEM_PROMPT),
+            ("user", CUSTOM_USER_PROMPT),
+        ])
+        user_prompt = {"input": transcript_text, "custom_prompt": custom_prompt}
+    else:
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", SYSTEM_PROMPT),
+            ("user", DEFAULT_USER_PROMPT),
+        ])
+        user_prompt = {"input": transcript_text}
 
     chain = prompt | llm | StrOutputParser()
-    return chain.invoke({"input": user_prompt})
+    return chain.invoke(user_prompt)
