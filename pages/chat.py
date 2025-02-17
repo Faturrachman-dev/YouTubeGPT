@@ -114,7 +114,11 @@ if is_api_key_set():
             # get the Chroma collection for the selected video
             if selected_video:
                 try:
-                    chroma_client = chromadb.Client(settings=chroma_settings)
+                    chroma_client = chromadb.HttpClient(
+                        host="localhost",  # or "127.0.0.1"
+                        port=8000,
+                        settings=chroma_settings
+                    )
                     # try to get an existing collection
                     collection = chroma_client.get_collection(
                         name=selected_video.yt_video_id

@@ -3,6 +3,7 @@ from datetime import datetime as dt
 
 import streamlit as st
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
+from modules.persistance import SQL_DB, LibraryEntry, Video
 
 from modules.helpers import (
     get_default_config_value,

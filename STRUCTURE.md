@@ -19,6 +19,10 @@
         └── README.md
     └── 📁modules
         └── __init__.py
+        └── 📁__pycache__
+            └── __init__.cpython-311.pyc
+            └── helpers.cpython-311.pyc
+            └── ui.cpython-311.pyc
         └── helpers.py
         └── persistance.py
         └── rag.py
@@ -38,6 +42,7 @@
         └── .gitkeep
         └── test_summary.py
     └── .dockerignore
+    └── .env
     └── .gitignore
     └── CHANGELOG.md
     └── config.json
@@ -45,8 +50,11 @@
     └── Dockerfile
     └── LICENSE
     └── main.py
+    └── nvidia-changes-summary.md
+    └── nvidia-nim-langchain.py
     └── README.md
     └── renovate.json
     └── requirements.txt
     └── steps-nvidianim-integration.md
+    └── STRUCTURE.md
 ```

@@ -173,8 +173,16 @@ def num_tokens_from_string(string: str, model: str) -> int:
     return len(encoding.encode(string))
 
 
-def read_file(file_path: str):
-    return Path(file_path).read_text()
+def read_file(file_path: str) -> str:
+    """Read a file and return its contents as a string.
+
+    Args:
+        file_path (str): Path to the file to read
+
+    Returns:
+        str: Contents of the file
+    """
+    return Path(file_path).read_text(encoding='utf-8')
 
 
 def is_environment_prod():

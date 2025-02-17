@@ -1,6 +1,6 @@
 import logging
 import uuid
-from typing import List
+from typing import List, Literal
 
 from chromadb import Collection
 from langchain_chroma import Chroma
@@ -39,26 +39,32 @@ def split_text_recursively(
     transcript_text: str,
     chunk_size: int = 512,
     chunk_overlap: int = 32,
-    len_func: str = "tokens",
+    len_func: Literal["tokens", "characters"] = "tokens",
 ) -> List[Document]:
     """
-    Splits text into chunks using recursive character text splitter.
+    Splits text into chunks recursively.
 
     Args:
         transcript_text (str): Text to split
-        chunk_size (int, optional): Size of chunks. Defaults to 512.
+        chunk_size (int, optional): Size of each chunk. Defaults to 512.
         chunk_overlap (int, optional): Overlap between chunks. Defaults to 32.
-        len_func (str, optional): Function to measure length. Defaults to "tokens".
+        len_func (Literal["tokens", "characters"], optional): Function to measure length. Defaults to "tokens".
 
     Returns:
         List[Document]: List of document chunks
     """
+    # Define the length function
+    length_function = len if len_func == "characters" else None  # Let the splitter handle token counting
+
+    # Create text splitter
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
-        length_function=len_func,
-        add_start_index=True,
+        length_function=length_function,
+        separators=["\n\n", "\n", ". ", " ", ""],
     )
+
+    # Split the text into documents
     return text_splitter.create_documents([transcript_text])
 
 

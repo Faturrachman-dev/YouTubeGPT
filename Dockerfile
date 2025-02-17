@@ -1,30 +1,51 @@
-FROM python:3.12.9-slim
+# Use multi-stage build
+FROM python:3.11-slim as builder
 
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y ffmpeg
+# Install only build dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy just the requirements.txt first to leverage Docker cache
+# Copy only requirements first to leverage cache
 COPY requirements.txt .
 
-# Install Python dependencies
-RUN pip3 install --upgrade pip && pip3 install -r requirements.txt
+# Install dependencies with caching
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-cache-dir -r requirements.txt
 
-# Copy application's code
-COPY . /app/
+# Final stage
+FROM python:3.11-slim
 
-# Streamlit's configuration options
-ENV PYTHONPATH="/app"
-ENV STREAMLIT_CLIENT_TOOLBAR_MODE="viewer"
-ENV STREAMLIT_SERVER_PORT=8501
-ENV ENVIRONMENT=production
+# Set working directory
+WORKDIR /app
 
-# Expose port for the application
+# Install only runtime dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ffmpeg && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy installed dependencies from builder
+COPY --from=builder /usr/local/lib/python3.11/site-packages/ /usr/local/lib/python3.11/site-packages/
+COPY --from=builder /usr/local/bin/ /usr/local/bin/
+
+# Copy application code
+COPY . .
+
+# Set environment variables
+ENV PYTHONPATH="/app" \
+    STREAMLIT_CLIENT_TOOLBAR_MODE="viewer" \
+    STREAMLIT_SERVER_PORT=8501 \
+    ENVIRONMENT=production
+
+# Expose port
 EXPOSE 8501
 
-# Add healthcheck
+# Healthcheck
 HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health
 
 # Set the entrypoint

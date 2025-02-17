@@ -1,3 +1,6 @@
+# Enable BuildKit
+version: '3.8'
+
 networks:
   net:
     driver: bridge
@@ -15,7 +18,7 @@ services:
     environment:
       - IS_PERSISTENT=TRUE
       - ALLOW_RESET=TRUE
-      - NVIDIA_API_KEY=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
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY}
     # possible values are: "no", always", "on-failure", "unless-stopped"
     #restart: unless-stopped 
     ports:
@@ -28,15 +31,24 @@ services:
       retries: 3
     networks:
       - net
+    deploy:
+      resources:
+        limits:
+          memory: 2G
 
   ytai:
     image: sudoleg/yotube-gpt:latest
     container_name: youtube-gpt
     depends_on:
-      - chromadb
+      chromadb:
+        condition: service_healthy
     build:
       context: .
       dockerfile: Dockerfile
+      cache_from:
+        - sudoleg/yotube-gpt:latest
+      args:
+        BUILDKIT_INLINE_CACHE: 1
     volumes:
       # replace the part before : with the path
       # to the directory where you would like
@@ -48,6 +60,10 @@ services:
       - "8501:8501"
     networks:
       - net
+    deploy:
+      resources:
+        limits:
+          memory: 4G
 
 volumes:
   chroma:
