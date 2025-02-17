@@ -3,11 +3,30 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import List, Literal
+from typing import List, Literal, Optional
 
 import streamlit as st
 import tiktoken
+from dotenv import load_dotenv
 
+load_dotenv()
+
+# Load config
+def load_config(file_path="config.json"):
+    """Loads configuration from a JSON file."""
+    with open(file_path, "r") as file:
+        config = json.load(file)
+    return config
+
+CONFIG = load_config()
+
+def get_default_config_value(key: str) -> Optional[str]:
+    """Retrieves a value from the config, handling potential KeyErrors."""
+    try:
+        return CONFIG[key]
+    except KeyError:
+        logging.warning(f"Key '{key}' not found in config.json.")
+        return None  # Or a suitable default value
 
 def is_api_key_set() -> bool:
     """Checks whether the NVIDIA API key is set in streamlit's session state or as environment variable."""
@@ -48,31 +67,6 @@ def get_available_models(model_type: Literal["nvidia", "embeddings"], api_key: s
         List[str]: List of available model IDs for the specified type
     """
     return list(get_default_config_value(f"available_models.{model_type}"))
-
-
-def get_default_config_value(
-    key_path: str,
-    config_file_path: str = "./config.json",
-) -> str:
-    """
-    Retrieves a configuration value from the JSON config file.
-
-    Args:
-        key_path (str): Path to the desired value (e.g., "default_model.nvidia")
-        config_file_path (str, optional): Path to config file. Defaults to "./config.json".
-
-    Returns:
-        str: The configuration value
-
-    Raises:
-        KeyError: If the key path doesn't exist in the configuration
-    """
-    with open(config_file_path, "r", encoding="utf-8") as config_file:
-        config = json.load(config_file)
-        value = config
-        for key in key_path.split("."):
-            value = value[key]
-        return value
 
 
 def extract_youtube_video_id(url: str):
@@ -154,23 +148,24 @@ def get_preffered_languages():
     return ["en-US", "en", "de"]
 
 
-def num_tokens_from_string(string: str, model: str) -> int:
+def num_tokens_from_string(string: str, model_name: str) -> int:
     """
     Returns the number of tokens in a text string.
 
     Args:
-        string (str): The text to tokenize
-        model (str): Model name for tokenization
+        string (str): The text string.
+        model_name (str): The name of the encoding to use.
 
     Returns:
-        int: Number of tokens
+        int: The number of tokens in the text string.
     """
     try:
-        encoding = tiktoken.encoding_for_model(model)
+        encoding = tiktoken.encoding_for_model(model_name)
     except KeyError:
-        # Fallback for models not in tiktoken
+        print("Warning: model not found. Using cl100k_base encoding.")
         encoding = tiktoken.get_encoding("cl100k_base")
-    return len(encoding.encode(string))
+    num_tokens = len(encoding.encode(string))
+    return num_tokens
 
 
 def read_file(file_path: str) -> str:
@@ -202,3 +197,12 @@ def save_to_file(content: str, filepath: str) -> None:
     path = Path(filepath)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+def count_tokens(text: str, model_name: str) -> int:
+    """Counts the number of tokens in a string using tiktoken."""
+    try:
+        encoding = tiktoken.encoding_for_model(model_name)
+    except KeyError:
+        encoding = tiktoken.get_encoding("cl100k_base")  # Default
+    return len(encoding.encode(text))

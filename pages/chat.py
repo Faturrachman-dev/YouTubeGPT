@@ -74,203 +74,90 @@ SQL_DB.create_tables([Video, Transcript, LibraryEntry], safe=True)
 chroma_connection_established = False
 chroma_settings = Settings(allow_reset=True, anonymized_telemetry=False)
 collection: None | Collection = None
+chroma_client = chromadb.Client(chroma_settings)
+chroma_db: Chroma | None = None
 
-if is_api_key_set():
-    if not is_api_key_valid(st.session_state.nvidia_api_key):
-        st.error("NVIDIA API key is invalid.")
-    else:
-        display_model_settings_sidebar()
+# Check if a video has been processed
+if "video_id" in st.session_state and st.session_state.video_id:
+    try:
+        collection = chroma_client.get_collection(name=st.session_state.video_id)
+        chroma_db = Chroma(
+            client=chroma_client,
+            collection_name=st.session_state.video_id,
+            embedding_function=OpenAIEmbeddings(
+                api_key=st.session_state.openai_api_key,
+                model=get_default_config_value("default_model.embeddings"),
+            ),  # Use OpenAI embeddings
+        )
+        chroma_connection_established = True
+    except Exception as e:
+        logging.error(f"Error connecting to ChromaDB: {e}")
+        st.error("Could not connect to Chroma. Please try again or process another video.")
+        chroma_connection_established = False  # Ensure this is set to False on error
+else:
+    st.info(
+        "No video selected. Please process a video on the 'Summary' page first."
+    )
+    chroma_connection_established = False
 
-        # select-box for choosing the video
-        videos = Video.select().order_by(Video.saved_on.desc())
-        if videos.exists():
-            selected_video = st.selectbox(
-                label="Select a video",
-                options=videos,
-                format_func=lambda x: f"{x.title} ({x.channel})",
-                placeholder="Select a video from the list",
-                help=get_default_config_value("help_texts.selected_video"),
-            )
 
-            # delete button
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button(
-                    label="Delete video",
-                    type="primary",
-                    use_container_width=True,
-                    disabled=not selected_video,
-                ):
-                    with st.spinner("Deleting video..."):
-                        try:
-                            delete_video(selected_video.yt_video_id)
-                        except Exception as e:
-                            logging.error("Error while deleting video: %s", e)
-                            st.error("An error occurred while deleting the video.")
-                        else:
-                            st.cache_data.clear()
-                            st.rerun()
+# --- Chat UI ---
+if is_api_key_set() and is_api_key_valid(st.session_state.nvidia_api_key):
+    display_model_settings_sidebar()
 
-            # get the Chroma collection for the selected video
-            if selected_video:
-                try:
-                    chroma_client = chromadb.HttpClient(
-                        host="localhost",  # or "127.0.0.1"
-                        port=8000,
-                        settings=chroma_settings
-                    )
-                    # try to get an existing collection
-                    collection = chroma_client.get_collection(
-                        name=selected_video.yt_video_id
-                    )
-                    chroma_connection_established = True
-                except Exception as e:
-                    logging.error(
-                        "An error occurred while connecting to Chroma: %s", e
-                    )
-                    st.error(
-                        "Could not connect to Chroma. Please try again or process another video."
-                    )
+    prompt = st.chat_input("Ask a question about the video")
+    if prompt:
+        if chroma_connection_established:  # Only proceed if Chroma connection is good
+            st.markdown(prompt)
 
-        # --- user input ---
-        url_input = display_video_url_input(disabled=chroma_connection_established)
-
-        col1, col2 = st.columns([0.3, 0.7])
-        with col1:
-            if url_input and not chroma_connection_established:
-                try:
-                    # 1. get video metadata
-                    vid_metadata = get_video_metadata(url_input)
-                    display_yt_video_container(
-                        video_title=vid_metadata["name"],
-                        channel=vid_metadata["channel"],
-                        url=url_input,
-                    )
-
-                    # 2. get transcript
-                    original_transcript = fetch_youtube_transcript(url_input)
-
-                    # 3. save video to db
-                    saved_video = Video.create(
-                        yt_video_id=extract_youtube_video_id(url_input),
-                        link=url_input,
-                        title=vid_metadata["name"],
-                        channel=vid_metadata["channel"],
-                        saved_on=dt.now(),
-                    )
-
-                    # 4. save transcript to db
-                    saved_transcript = Transcript.create(
-                        video=saved_video,
-                        text=original_transcript,
-                        processed_token_num=0,
-                    )
-
-                    # 5. split the transcript into chunks
-                    transcript_excerpts = split_text_recursively(
-                        transcript_text=original_transcript,
-                        chunk_size=CHUNK_SIZE_FOR_UNPROCESSED_TRANSCRIPT,
-                        chunk_overlap=32,
-                        len_func="tokens",
-                    )
-
-                    # 6. embed the chunks and add them to the collection
-                    embed_excerpts(
-                        transcript_excerpts=transcript_excerpts,
-                        collection=collection,
-                        openai_embedding_model=OpenAIEmbeddings(
-                            api_key=st.session_state.nvidia_api_key
-                        ),
-                        chunk_size=chunk_size,
-                    )
-
-                    # 7. update transcript in db
-                    saved_transcript.processed_token_num = sum(
-                        num_tokens_from_string(
-                            string=e.page_content, model=st.session_state.model
+            if collection:  # Check if the collection exists
+                with st.spinner("Generating answer..."):
+                    try:
+                        relevant_docs = find_relevant_documents(
+                            query=prompt,
+                            db=chroma_db,
+                            k=CHUNK_SIZE_TO_K_MAPPING.get(
+                                collection.metadata["chunk_size"]
+                            ),
                         )
-                        for e in transcript_excerpts
-                    )
-                    saved_transcript.save()
 
-                except InvalidUrlException as e:
-                    st.error(e.message)
-                except NoTranscriptReceivedException as e:
-                    st.error(e.message)
-                    e.log_error()
-                except Exception as e:
-                    logging.error(
-                        "An unexpected error occurred: %s", str(e), exc_info=True
-                    )
-                    st.error(GENERAL_ERROR_MESSAGE)
-                else:
-                    st.success(
-                        "The video has been processed! Please refresh the page and choose it in the select-box above."
-                    )
-                    st.rerun()
+                        # Use ChatNVIDIA
+                        chat_llm = ChatNVIDIA(
+                            api_key=st.session_state.nvidia_api_key,
+                            model=st.session_state.model,
+                            temperature=st.session_state.temperature,
+                            top_p=st.session_state.top_p,
+                        )
 
-        with col2:
-            if collection and collection.count() > 0:
-                # Initialize vector store with OpenAI embeddings
-                chroma_db = Chroma(
-                    client=chroma_client,
-                    collection_name=collection.name,
-                    embedding_function=OpenAIEmbeddings(
-                        api_key=st.session_state.nvidia_api_key
-                    ),
-                )
+                        response = generate_response(
+                            question=prompt,
+                            llm=chat_llm,
+                            relevant_docs=relevant_docs,
+                        )
+                        st.session_state.response = response
 
-                with st.expander(label=":information_source: Tips and important notes"):
-                    st.markdown(read_file(".assets/rag_quidelines.md"))
+                        # Display response and save button
+                        st.markdown(response)
+                        st.button(
+                            label="Save response to library",
+                            on_click=save_response_to_lib,
+                        )
 
-                prompt = st.chat_input(
-                    placeholder="Ask a question or provide a topic covered in the video",
-                )
+                    except Exception as e:
+                        logging.error(
+                            "An unexpected error occurred: %s", str(e), exc_info=True
+                        )
+                        st.error(GENERAL_ERROR_MESSAGE)
 
-                if prompt:
-                    st.session_state.user_prompt = prompt
-                    with st.spinner("Generating answer..."):
-                        try:
-                            relevant_docs = find_relevant_documents(
-                                query=prompt,
-                                db=chroma_db,
-                                k=CHUNK_SIZE_TO_K_MAPPING.get(
-                                    collection.metadata["chunk_size"]
-                                ),
-                            )
-
-                            # Use ChatNVIDIA
-                            chat_llm = ChatNVIDIA(
-                                api_key=st.session_state.nvidia_api_key,
-                                model=st.session_state.model,
-                                temperature=st.session_state.temperature,
-                                top_p=st.session_state.top_p,
-                            )
-
-                            response = generate_response(
-                                question=prompt,
-                                llm=chat_llm,
-                                relevant_docs=relevant_docs,
-                            )
-                            st.session_state.response = response
-                            
-                            # Display response and save button
-                            st.markdown(response)
-                            st.button(
-                                label="Save response to library",
-                                on_click=save_response_to_lib,
-                            )
-
-                        except Exception as e:
-                            logging.error(
-                                "An unexpected error occurred: %s", str(e), exc_info=True
-                            )
-                            st.error(GENERAL_ERROR_MESSAGE)
-
-            else:
+            else: # collection is None
                 st.info(
-                    "No videos processed yet. Go to the 'Summary' page and enter a YouTube video URL."
+                    "No collection found for this video. Please process the video again."
                 )
+
+        else: # chroma_connection_established is False
+            st.info(
+                "No videos processed yet. Go to the 'Summary' page and enter a YouTube video URL."
+            )
 
 def save_response_to_lib():
     """Saves the generated response (question and answer) to the database."""

@@ -15,6 +15,7 @@
         └── .gitkeep
         └── 📁audio
             └── .gitkeep
+        └── videos.sqlite3
     └── 📁docs
         └── README.md
     └── 📁modules
@@ -22,7 +23,12 @@
         └── 📁__pycache__
             └── __init__.cpython-311.pyc
             └── helpers.cpython-311.pyc
+            └── persistance.cpython-311.pyc
+            └── rag.cpython-311.pyc
+            └── summary.cpython-311.pyc
+            └── transcription.cpython-311.pyc
             └── ui.cpython-311.pyc
+            └── youtube.cpython-311.pyc
         └── helpers.py
         └── persistance.py
         └── rag.py
@@ -44,6 +50,7 @@
     └── .dockerignore
     └── .env
     └── .gitignore
+    └── accelerate-docker.md
     └── CHANGELOG.md
     └── config.json
     └── docker-compose.yml

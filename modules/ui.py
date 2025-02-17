@@ -30,7 +30,7 @@ def set_api_key_in_session_state():
             key="nvidia_api_key",
             type="password",
         )
-    else:
+    elif "nvidia_api_key" not in st.session_state:
         st.session_state.nvidia_api_key = NVIDIA_API_KEY
 
 
@@ -91,16 +91,15 @@ def display_model_settings_sidebar():
             )
 
 
-def display_link_to_repo(view: str = "main"):
+def display_link_to_repo(page: str):
     """Displays a link to the GitHub repository."""
-    st.sidebar.write(
-        f"[View the source code]({get_default_config_value(f'github_repo_links.{view}')})"
-    )
+    if page == "main":
+        st.sidebar.markdown(f"[{get_default_config_value('app_title')}]({get_default_config_value('github_repo_links.main')})")
+    else:
+        st.sidebar.markdown(f"[{page.capitalize()}]({get_default_config_value(f'github_repo_links.{page}')})")
 
 
-def display_video_url_input(
-    label: str = "Enter URL of the YouTube video:", disabled=False
-):
+def display_video_url_input(label: str = "Enter a YouTube video URL:", disabled: bool = False):
     """Displays an input field for the URL of the YouTube video."""
     return st.text_input(
         label=label,

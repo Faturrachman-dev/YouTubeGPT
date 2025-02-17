@@ -1,91 +1,121 @@
 import logging
+import math
+import re
+from typing import List
 
+from langchain.chains.summarize import load_summarize_chain
+from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_nvidia_ai_endpoints import ChatNVIDIA
+from langchain_core.documents import Document
 
-from .helpers import num_tokens_from_string
+from modules.helpers import (
+    count_tokens,
+    get_default_config_value,
+)
 
-# NVIDIA-specific context window sizes
+# Constants for chunking
+INITIAL_CHUNK_SIZE = 16000  # Try a larger initial chunk size
+OVERLAP_SIZE = 1000  # Keep some overlap
+
+# Define NVIDIA_CONTEXT_WINDOWS here
 NVIDIA_CONTEXT_WINDOWS = {
-    "meta/llama-3.1-405b-instruct": 4096,
+    "meta/llama-3.1-405b-instruct": 8192,  # Example value - ADJUST AS NEEDED!
+    "mixtral_8x7b": 32768, # Example value - ADJUST AS NEEDED!
+    "nemotron_340b" : 4096
 }
 
-SYSTEM_PROMPT = """You are an expert in processing video transcripts according to user's request. 
-You will receive a transcript of a video and a request from a user. Your task is to process the transcript according to the user's request.
-If no specific request is provided, create a comprehensive summary of the video that captures its main points, key insights, and important details.
-"""
-
-DEFAULT_USER_PROMPT = """Please provide a comprehensive summary of the following video transcript. Include:
-1. Main topic and key points
-2. Important details and examples
-3. Any conclusions or takeaways
-
-Transcript:
-{input}
-"""
-
-CUSTOM_USER_PROMPT = """Process the following video transcript according to this request:
-{custom_prompt}
-
-Transcript:
-{input}
-"""
-
-
 class TranscriptTooLongForModelException(Exception):
-    """Raised when the transcript is too long for the model's context window."""
+    """Exception raised when the transcript is too long for the model."""
 
-    def __init__(self, transcript_length: int, model_name: str):
-        self.message = (
-            f"The transcript is too long ({transcript_length} tokens) for the model's context window "
-            f"({NVIDIA_CONTEXT_WINDOWS.get(model_name, 4096)} tokens).\n\n"
-            "Consider the following options:\n"
-            "1. Choose another model with a larger context window.\n"
-            "2. Use the 'Chat' feature to ask specific questions about the video. There you won't be limited by the number of tokens."
-        )
+    def __init__(self, message="Transcript is too long for the selected model."):
+        self.message = message
         super().__init__(self.message)
 
+    def log_error(self):
+        """Logs the error message."""
+        logging.error(self.message)
 
-def get_transcript_summary(
-    transcript_text: str,
-    llm: ChatNVIDIA,
-    custom_prompt: str = None,
-) -> str:
+
+def get_transcript_summary(transcript_text: str, llm, custom_prompt: str = None):
+    """Gets a summary of a transcript using the map-reduce method.
+    DEPRECATED: Use summarize_with_refined_prompt instead.
     """
-    Generates a summary of a video transcript using NVIDIA NIM.
+    logging.warning("get_transcript_summary is deprecated. Use summarize_with_refined_prompt instead.")
+    prompt_template = """Write a concise summary of the following:
+    "{text}"
+    CONCISE SUMMARY:"""
 
-    Args:
-        transcript_text (str): The transcript to summarize
-        llm (ChatNVIDIA): The NVIDIA language model instance
-        custom_prompt (str, optional): Custom prompt for specific summary requirements
-
-    Returns:
-        str: Generated summary
-
-    Raises:
-        TranscriptTooLongForModelException: If transcript length exceeds model's context window
-    """
-    # Check transcript length against model's context window
-    context_window = NVIDIA_CONTEXT_WINDOWS.get(llm.model, 4096)
-    transcript_tokens = num_tokens_from_string(transcript_text, llm.model)
-
-    if transcript_tokens > context_window:
-        raise TranscriptTooLongForModelException(transcript_tokens, llm.model)
-
-    # Create prompt template based on whether custom prompt is provided
     if custom_prompt:
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", SYSTEM_PROMPT),
-            ("user", CUSTOM_USER_PROMPT),
-        ])
-        user_prompt = {"input": transcript_text, "custom_prompt": custom_prompt}
-    else:
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", SYSTEM_PROMPT),
-            ("user", DEFAULT_USER_PROMPT),
-        ])
-        user_prompt = {"input": transcript_text}
+        prompt_template = custom_prompt + '\n"""\n{text}\n"""\nCONCISE SUMMARY:'
 
-    chain = prompt | llm | StrOutputParser()
-    return chain.invoke(user_prompt)
+    prompt = PromptTemplate(template=prompt_template, input_variables=["text"])
+    summary_chain = load_summarize_chain(
+        llm, chain_type="map_reduce", map_prompt=prompt, combine_prompt=prompt
+    )
+    return summary_chain.invoke(transcript_text)
+
+def create_chunks(text: str, chunk_size: int, overlap: int) -> List[str]:
+    """Splits text into chunks with specified size and overlap."""
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = min(start + chunk_size, len(text))
+        chunks.append(text[start:end])
+        start += chunk_size - overlap
+    return chunks
+
+def summarize_with_refined_prompt(transcript_text: str, llm, custom_prompt: str = None):
+    """Summarizes a transcript using a refined prompting strategy and chunking."""
+
+    model_name = llm.model  # Get the model name from the llm object
+    model_context_window = NVIDIA_CONTEXT_WINDOWS.get(model_name)
+    if model_context_window is None:
+        raise ValueError(f"Context window size not defined for model: {model_name}")
+
+    # Check if the ENTIRE transcript fits within the model's context window
+    num_tokens = count_tokens(transcript_text, model_name)
+    logging.info(f"Number of tokens in transcript: {num_tokens}")
+
+    if num_tokens > model_context_window:
+        initial_chunk_size = model_context_window - OVERLAP_SIZE  # Ensure chunks fit
+        overlap_size = OVERLAP_SIZE
+    else:  # If it fits, just summarize it directly.  No chunking needed.
+        initial_chunk_size = model_context_window
+        overlap_size = 0
+
+    chunks = create_chunks(transcript_text, initial_chunk_size, overlap_size)
+    logging.info(f"Number of chunks created: {len(chunks)}")
+
+    # --- Refined Prompting ---
+    if custom_prompt:
+        map_prompt_template = custom_prompt + "\n\n" + """
+        "{text}"
+        CONCISE SUMMARY:"""
+    else:
+        map_prompt_template = """Provide a detailed summary of the following text, extracting and emphasizing the key points, main arguments, and any supporting evidence or examples.  Aim for a comprehensive overview that captures the essence of the content, making it suitable for someone who hasn't read the original text. Include any important conclusions or findings.
+        "{text}"
+        DETAILED SUMMARY:"""
+
+    map_prompt = PromptTemplate(template=map_prompt_template, input_variables=["text"])
+
+    combine_prompt_template = """Combine the following summaries into a single, coherent, and comprehensive summary.  Ensure the final summary is well-organized, flows logically, and accurately reflects the main ideas and supporting details from the individual summaries. Eliminate redundancy and prioritize the most important information.
+    "{text}"
+    COMPREHENSIVE SUMMARY:"""
+    combine_prompt = PromptTemplate(template=combine_prompt_template, input_variables=["text"])
+
+    summary_chain = load_summarize_chain(
+        llm,
+        chain_type="map_reduce",
+        map_prompt=map_prompt,
+        combine_prompt=combine_prompt,
+        verbose=False  # Set to True for debugging
+    )
+
+    try:
+        # Convert chunks to Document objects
+        docs = [Document(page_content=chunk) for chunk in chunks]
+        summary = summary_chain.invoke(docs)  # Use invoke instead of run
+        return summary["output_text"]  # Extract the summary text
+
+    except Exception as e:
+        raise TranscriptTooLongForModelException(f"Error during summarization: {e}")

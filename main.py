@@ -3,7 +3,7 @@ import logging
 import streamlit as st
 
 from modules.helpers import is_api_key_set, is_api_key_valid, read_file
-from modules.ui import display_link_to_repo, display_nav_menu
+from modules.ui import display_api_key_warning, display_link_to_repo, display_nav_menu, set_api_key_in_session_state
 
 
 def main():
@@ -13,7 +13,7 @@ def main():
 
     # display sidebar with page links
     display_nav_menu()
-    display_link_to_repo()
+    display_link_to_repo("main")
 
     if not is_api_key_set():
         st.info(
