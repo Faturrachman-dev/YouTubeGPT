@@ -10,48 +10,69 @@ import tiktoken
 from dotenv import load_dotenv
 
 load_dotenv()
+# print(f"Loaded .env file: {load_dotenv()}")  # Removed debug print
 
 # Load config
 def load_config(file_path="config.json"):
     """Loads configuration from a JSON file."""
-    with open(file_path, "r") as file:
-        config = json.load(file)
-    return config
+    # print(f"Attempting to load config from: {file_path}")  # Removed debug print
+    try:
+        with open(file_path, "r") as file:
+            config = json.load(file)
+            # print(f"Successfully loaded config: {config}")  # Removed debug print
+            return config
+    except FileNotFoundError:
+        print(f"Error: File not found at {file_path}")  # Keep error print
+        return None
+    except json.JSONDecodeError as e:
+        print(f"Error: Invalid JSON in config file: {e}")  # Keep error print
+        return None
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}") # Keep error print
+        return None
 
 CONFIG = load_config()
+# if CONFIG is None: # Removed debug prints
+#     print("CONFIG is None.  Check for errors above.")
+# else:
+#     print(f"CONFIG keys: {CONFIG.keys()}")
 
 def get_default_config_value(key: str) -> Optional[str]:
     """Retrieves a value from the config, handling potential KeyErrors."""
+    if CONFIG is None:
+        logging.warning("CONFIG is None. Cannot retrieve values.") # Keep warning
+        return None
     try:
-        return CONFIG[key]
+        # print(f"Attempting to retrieve key: {key}")  # Removed debug print
+        value = CONFIG[key]
+        # print(f"Retrieved value: {value}")  # Removed debug print
+        return value
     except KeyError:
-        logging.warning(f"Key '{key}' not found in config.json.")
+        logging.warning(f"Key '{key}' not found in config.json.") # Keep warning
         return None  # Or a suitable default value
 
 def is_api_key_set() -> bool:
-    """Checks whether the NVIDIA API key is set in streamlit's session state or as environment variable."""
-    return bool(os.getenv("NVIDIA_API_KEY") or "nvidia_api_key" in st.session_state)
+    """Checks whether the NVIDIA API key is set either in session state or as an environment variable."""
+    return "nvidia_api_key" in st.session_state or bool(os.getenv("NVIDIA_API_KEY"))
 
-
-@st.cache_data
-def is_api_key_valid(api_key: str) -> bool:
+def is_api_key_valid(api_key: str = None) -> bool:
     """
-    Performs a basic format check for a NVIDIA API key.
-
-    Args:
-        api_key (str): The NVIDIA API key to validate.
-
-    Returns:
-        bool: True if the key format is valid, False otherwise.
+    Checks if the NVIDIA API key is valid.  If no key is provided, checks the session state.
     """
+    if api_key is None:
+        if "nvidia_api_key" in st.session_state:
+            api_key = st.session_state.nvidia_api_key
+        else:
+            return False  # No key provided and not in session state
+
     if not api_key.startswith("nvapi-"):
         logging.error("Invalid NVIDIA API key format - must start with 'nvapi-'")
         return False
     elif len(api_key) < 20:  # Minimum length for NVIDIA keys
         logging.error("NVIDIA API key seems too short")
         return False
-    
-    logging.info("NVIDIA API key format validation successful")
+
+    logging.info("NVIDIA API key format validation successful") # Keep this one, it's helpful
     return True
 
 
@@ -84,21 +105,17 @@ def extract_youtube_video_id(url: str):
     Example:
         >>> extract_youtube_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
         'dQw4w9WgXcQ'
-        >>> extract_youtube_video_id("https://youtu.be/dQw4w9WgXcQ")
-        'dQw4w9WgXcQ'
-        >>> extract_youtube_video_id("https://www.youtube.com/embed/dQw4w9WgXcQ")
-        'dQw4w9WgXcQ'
-        >>> extract_youtube_video_id("This is not a valid YouTube URL")
-        None
-
-    Note:
-        This function uses regular expressions to match the URL pattern and extract the video ID. It is designed to
-        accommodate most common YouTube URL formats, but may not cover all possible variations.
     """
-    pattern = r"(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|\S*?[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})"
-    match = re.search(pattern, url)
+    # Regular expression for various YouTube URL formats
+    youtube_regex = (
+        r"(?:https?:\/\/)?(?:www\.)?"
+        r"(?:youtube\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|\S*?[?&]v=)|"
+        r"youtu\.be\/)([a-zA-Z0-9_-]{11})"
+    )
+
+    match = re.search(youtube_regex, url)
     if match:
-        return match.group(1)
+        return match.group(1)  # The video ID is captured in group 1
     return None
 
 
@@ -140,7 +157,7 @@ def save_response_as_file(
             file.write(file_content)
 
     # Log the full path of the saved file
-    logging.info("File saved at: %s", file_path)
+    logging.info("File saved at: %s", file_path) # Keep this, it's useful
 
 
 def get_preffered_languages():
@@ -162,7 +179,7 @@ def num_tokens_from_string(string: str, model_name: str) -> int:
     try:
         encoding = tiktoken.encoding_for_model(model_name)
     except KeyError:
-        print("Warning: model not found. Using cl100k_base encoding.")
+        print("Warning: model not found. Using cl100k_base encoding.") # Keep warning
         encoding = tiktoken.get_encoding("cl100k_base")
     num_tokens = len(encoding.encode(string))
     return num_tokens

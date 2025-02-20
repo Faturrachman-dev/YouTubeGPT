@@ -19,98 +19,35 @@ def display_api_key_warning():
 
 
 def set_api_key_in_session_state():
-    """If the env-var NVIDIA_API_KEY is set, its value is assigned to nvidia_api_key property in streamlit's session state.
-    Otherwise an input field for the API key is displayed.
-    """
-    NVIDIA_API_KEY = getenv("NVIDIA_API_KEY")
-
-    if not NVIDIA_API_KEY:
+    """Sets the NVIDIA API key in streamlit's session state."""
+    if not is_api_key_set():
         st.sidebar.text_input(
-            "Enter your NVIDIA API key",
+            label="NVIDIA API Key",
             key="nvidia_api_key",
             type="password",
+            placeholder="Enter your NVIDIA API key (nvapi-...)",
         )
-    elif "nvidia_api_key" not in st.session_state:
-        st.session_state.nvidia_api_key = NVIDIA_API_KEY
 
 
-def is_temperature_and_top_p_altered() -> bool:
-    """Check if temperature or top_p have been changed from defaults."""
-    if st.session_state.temperature != get_default_config_value(
-        "temperature"
-    ) and st.session_state.top_p != get_default_config_value("top_p"):
-        return True
-    return False
+def display_video_url_input(prefilled_url=None):
+    """Displays the video URL input field.
 
-
-def display_model_settings_sidebar():
-    """Function for displaying the sidebar and adjusting settings.
-
-    Every widget with a key is added to streamlit's session state and can be accessed in the application.
-    For example here, the selectbox for model has the key 'model'.
-    Thus the selected model can be accessed via st.session_state.model.
+    Args:
+        prefilled_url: Optional URL to prefill the input field.
+    Returns:
+        The YouTube video URL.  // IMPORTANT:  It now ALWAYS returns the URL.
     """
-    if "model" not in st.session_state:
-        st.session_state.model = get_default_config_value("default_model.nvidia")
-
-    # Always use NVIDIA
-    st.session_state.api_provider = "nvidia"
-
-    with st.sidebar:
-        st.header("Model settings")
-        model = st.selectbox(
-            label="Select NVIDIA model",
-            options=get_available_models(model_type="nvidia"),
-            key="model",
-            help=get_default_config_value("help_texts.model"),
-        )
-
-        st.slider(
-            label="Adjust temperature",
-            min_value=0.0,
-            max_value=2.0,
-            step=0.1,
-            key="temperature",
-            value=get_default_config_value("temperature"),
-            help=get_default_config_value("help_texts.temperature"),
-        )
-
-        st.slider(
-            label="Adjust Top P",
-            min_value=0.0,
-            max_value=1.0,
-            step=0.1,
-            key="top_p",
-            value=get_default_config_value("top_p"),
-            help=get_default_config_value("help_texts.top_p"),
-        )
-
-        if is_temperature_and_top_p_altered():
-            st.warning(
-                "It's generally recommended to alter temperature or top_p but not both."
-            )
-
-
-def display_link_to_repo(page: str):
-    """Displays a link to the GitHub repository."""
-    if page == "main":
-        st.sidebar.markdown(f"[{get_default_config_value('app_title')}]({get_default_config_value('github_repo_links.main')})")
-    else:
-        st.sidebar.markdown(f"[{page.capitalize()}]({get_default_config_value(f'github_repo_links.{page}')})")
-
-
-def display_video_url_input(label: str = "Enter a YouTube video URL:", disabled: bool = False):
-    """Displays an input field for the URL of the YouTube video."""
-    return st.text_input(
-        label=label,
-        key="url_input",
-        disabled=disabled,
-        help=get_default_config_value("help_texts.youtube_url"),
+    url = st.text_input(
+        label="Enter YouTube Video URL:",
+        placeholder="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        value=prefilled_url,
+        key="video_url",
     )
+    return url  # Always return the URL
 
 
 def display_yt_video_container(video_title: str, channel: str, url: str):
-    """Displays a YouTube video container with title and channel information."""
+    """Displays the YouTube video container."""
     st.subheader(
         f"'{video_title}' from {channel}.",
         divider="gray",
@@ -129,5 +66,45 @@ def display_nav_menu():
 def get_available_models(model_type: str, api_key: str = "") -> list:
     """Gets available NVIDIA models."""
     if model_type == "nvidia":
-        return get_default_config_value("available_models.nvidia")
+        available_models_dict = get_default_config_value("available_models")
+        return available_models_dict.get("nvidia", []) if available_models_dict else []
     return []
+
+def display_link_to_repo(page: str):
+    if page == "main":
+        st.sidebar.link_button(
+            "View on GitHub",
+            url=get_default_config_value("github_repo_links").get("main") if get_default_config_value("github_repo_links") else None,
+        )
+    elif page == "summary":
+        st.sidebar.link_button(
+            "View on GitHub",
+            url=get_default_config_value("github_repo_links").get("summary") if get_default_config_value("github_repo_links") else None,
+        )
+    elif page == "chat":
+        st.sidebar.link_button(
+            "View on GitHub",
+            url=get_default_config_value("github_repo_links").get("chat") if get_default_config_value("github_repo_links") else None,
+        )
+
+def display_chat_input():
+    """
+    Displays the chat input box.
+    Returns:
+        str: User's input.
+    """
+    return st.chat_input("Ask a question about this video")
+
+def display_chat_messages(messages):
+    """
+    Displays the chat messages.
+    Args:
+        messages (list): List of chat messages.
+    """
+    for message in messages:
+        if isinstance(message, AIMessage):
+            with st.chat_message("assistant"):
+                st.markdown(message.content)
+        elif isinstance(message, HumanMessage):
+            with st.chat_message("user"):
+                st.markdown(message.content)

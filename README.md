@@ -2,68 +2,94 @@
   <img src=".assets/yt-summarizer-logo.png" alt="Logo" width="250">
 </p>
 
-<h1 align="center">YouTubeGPT- Your YouTube AI</h1>
+<h1 align="center">YouTubeGPT- Your YouTube AI (NVIDIA Edition)</h1>
 
 ## Features :sparkles:
 
-YouTubeGPT lets you **summarize and chat (Q&A)** with YouTube videos using NVIDIA's language models. Its features include:
+This modified version of YouTubeGPT lets you **summarize and chat (Q&A)** with YouTube videos using **NVIDIA's language models**. Its features include:
 
-- **provide a custom prompt for summaries** :writing_hand: [**VIEW DEMO**](https://youtu.be/rJqx3qvebws)
-  - you can tailor the summary to your needs by providing a custom prompt or just use the default summarization
-- **get answers to questions about the video content** :question: [**VIEW DEMO**](https://youtu.be/rI8NogvHplE)
-  - part of the application is designed and optimized specifically for question answering tasks (Q&A)
-- **create your own library/knowledge base** :open_file_folder:
-  - the summaries and answers can be saved to a library accessible at a separate page!
-  - additionally, summaries can be automatically saved in the directory where you run the app. The summaries will be available under `<YT-channel-name>/<video-title>.md`
-- **use NVIDIA models for text generation** :robot:
-  - currently available: meta/llama-3.1-405b-instruct
-  - by using NVIDIA models, you can summarize even longer videos and potentially get better responses
-- **experiment with settings** :gear:
-  - adjust the temperature and top P of the model
-- **choose UI theme** :paintbrush:
-  - go to the three dots in the upper right corner, select settings and choose either light, dark or my aesthetic custom theme
+- **Provide a custom prompt for summaries** :writing_hand: [**VIEW DEMO**](https://youtu.be/rJqx3qvebws)
+  - Tailor the summary to your needs by providing a custom prompt, or use the default summarization.
+- **Get answers to questions about the video content** :question: [**VIEW DEMO**](https://youtu.be/rI8NogvHplE)
+  - The application is optimized for question answering (Q&A).
+- **Create your own library/knowledge base** :open_file_folder:
+  - Summaries and answers can be saved to a library accessible on a separate page.
+  - Summaries are also automatically saved in the `responses` directory within your project folder, organized by channel and video title.
+- **Uses NVIDIA models for text generation** :robot:
+  - **Currently available:** `meta/llama-3.1-405b-instruct`
+  - NVIDIA models allow for summarizing longer videos.
+- **Experiment with settings** :gear:
+  - Adjust the temperature and top P of the model.
+- **Choose UI theme** :paintbrush:
+  - Go to the three dots in the upper right corner, select settings, and choose either light, dark, or a custom theme.
 
-## Installation & usage
+## Installation & Usage (NVIDIA-Only)
 
-To run the app, you will first need to get an NVIDIA API-Key. This is very straightforward. Have a look at [NVIDIA's instructions](https://developer.nvidia.com/) to get started.
+This version is configured to exclusively use NVIDIA's language models.  You will need an NVIDIA API key.  See [NVIDIA's instructions](https://developer.nvidia.com/) to get started.
 
-### Run with Docker (for ChromaDB only)
+**Prerequisites:**
 
-1. Ensure that your `.env` file contains the NVIDIA API key.
-2. Adjust the path to save the summaries (l. 39 in [docker-compose.yml](docker-compose.yml))
-3. Execute the following command to run ChromaDB:
+*   **NVIDIA API Key:** Obtain your key from the NVIDIA developer website.
+*   **Docker Desktop:**  Install Docker Desktop.  This is only used for running ChromaDB (the vector database).
+*   **`yt-dlp`:** Install `yt-dlp` using pip: `pip install yt-dlp`
+*   **Python 3.11:** This project is developed and tested with Python 3.11.
 
-```bash
-# run chromadb
-docker-compose up -d chromadb
-```
+**Steps:**
 
-The app will be accessible in the browser under <http://localhost:8501>.
+1.  **Clone the Repository:**
+    ```bash
+    git clone <repository_url>  # Replace with the actual URL
+    cd <repository_directory>
+    ```
 
-### Development in virtual environment
+2.  **Set up Virtual Environment:**
+    ```bash
+    python -m venv .venv
+    .\.venv\Scripts\Activate  # On Windows (PowerShell)
+    ```
 
-```bash
-# create and activate a virtual environment
-python -m venv .venv
-source .venv/bin/activate
-# install requirements
-pip install -r requirements.txt
-# you'll need an NVIDIA API key
-export NVIDIA_API_KEY=<your-nvidia-api-key>
-# run app
-streamlit run main.py
-```
+3.  **Install Dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-The app will be accessible in the browser under <http://localhost:8501>.
+4.  **Set NVIDIA API Key (Using .env file):**
+    *   Make sure your `.env` file in the root of your project directory contains the line:
+        ```
+        NVIDIA_API_KEY=your_nvidia_api_key
+        ```
+        Replace `your_nvidia_api_key` with your actual NVIDIA API key (no quotes). The provided code already uses `python-dotenv` to load environment variables from the `.env` file, so no further action is needed in the terminal.
 
-## Technologies used
+5.  **Run ChromaDB (Docker):**
+    *   Make sure Docker Desktop is running.
+    *   In a *separate* PowerShell terminal, navigate to your project directory and run:
+        ```powershell
+        docker-compose up -d chromadb
+        ```
 
-The project is built using some amazing libraries:
+6.  **Run the Application:**
+    *   In the terminal where you activated the virtual environment, run:
+        ```powershell
+        streamlit run main.py
+        ```
 
-- The project uses [YouTube Transcript API](https://github.com/jdepoix/youtube-transcript-api) for fetching transcripts.
-- [LangChain](https://github.com/langchain-ai/langchain) is used to create a prompt, submit it to an LLM and process its response.
-- The UI is built using [Streamlit](https://github.com/streamlit/streamlit).
-- [ChromaDB](https://docs.trychroma.com/) is used as a vector store for embeddings.
+7.  **Access the Application:**
+    *   The application should open automatically in your browser at `http://localhost:8501`.
+
+**Important Notes:**
+
+*   This version uses OpenAI embeddings for the vector database.  A future update might explore NVIDIA embedding models.
+*   The `max_tokens` parameter is not directly supported by the NVIDIA Langchain integration.  It's handled implicitly.
+*   Make sure your NVIDIA API key is kept secret.  Do not commit it to your repository.
+
+## Technologies Used
+
+- [YouTube Transcript API](https://github.com/jdepoix/youtube-transcript-api): For fetching transcripts.
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp):  For fetching video metadata.
+- [LangChain](https://github.com/langchain-ai/langchain): For prompt creation, LLM interaction, and RAG.
+- [langchain-nvidia-ai-endpoints](https://pypi.org/project/langchain-nvidia-ai-endpoints/):  For using NVIDIA's language models.
+- [Streamlit](https://github.com/streamlit/streamlit): For the user interface.
+- [ChromaDB](https://docs.trychroma.com/): As a vector store for embeddings (running in Docker).
 
 ## License
 

@@ -13,6 +13,12 @@ from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
 from modules.helpers import num_tokens_from_string
 
+
+class NoDocumentsFoundException(Exception):
+    """Exception raised when no relevant documents are found in the vector store."""
+    pass
+
+
 CHUNK_SIZE_FOR_UNPROCESSED_TRANSCRIPT = 512
 
 # Mapping for chunk sizes to number of chunks to retrieve
@@ -39,7 +45,7 @@ def split_text_recursively(
     transcript_text: str,
     chunk_size: int = 512,
     chunk_overlap: int = 32,
-    len_func: Literal["tokens", "characters"] = "tokens",
+    len_func: Literal["tokens", "characters"] = "characters",
 ) -> List[Document]:
     """
     Splits text into chunks recursively.
@@ -48,13 +54,13 @@ def split_text_recursively(
         transcript_text (str): Text to split
         chunk_size (int, optional): Size of each chunk. Defaults to 512.
         chunk_overlap (int, optional): Overlap between chunks. Defaults to 32.
-        len_func (Literal["tokens", "characters"], optional): Function to measure length. Defaults to "tokens".
+        len_func (Literal["tokens", "characters"], optional): Function to measure length. Defaults to "characters".
 
     Returns:
         List[Document]: List of document chunks
     """
-    # Define the length function
-    length_function = len if len_func == "characters" else None  # Let the splitter handle token counting
+    # Always use character-based splitting for simplicity
+    length_function = len
 
     # Create text splitter
     text_splitter = RecursiveCharacterTextSplitter(
@@ -71,7 +77,7 @@ def split_text_recursively(
 def embed_excerpts(
     transcript_excerpts: List[Document],
     collection: Collection,
-    openai_embedding_model: Embeddings,
+    nvidia_model: ChatNVIDIA,
     chunk_size: int,
 ) -> None:
     """
@@ -80,16 +86,20 @@ def embed_excerpts(
     Args:
         transcript_excerpts (List[Document]): List of document chunks
         collection (Collection): ChromaDB collection
-        openai_embedding_model (Embeddings): OpenAI embeddings model
+        nvidia_model (ChatNVIDIA): NVIDIA model for embeddings
         chunk_size (int): Size of chunks
     """
     try:
+        # Get embeddings using NVIDIA model
+        embeddings = []
+        for doc in transcript_excerpts:
+            response = nvidia_model.invoke([{"role": "user", "content": doc.page_content}])
+            embeddings.append(response.content)  # Using the response content as embedding
+
         collection.add(
             ids=[str(uuid.uuid4()) for _ in transcript_excerpts],
             documents=[doc.page_content for doc in transcript_excerpts],
-            embeddings=openai_embedding_model.embed_documents(
-                [doc.page_content for doc in transcript_excerpts]
-            ),
+            embeddings=embeddings,
             metadatas=[{"chunk_size": chunk_size} for _ in transcript_excerpts],
         )
     except Exception as e:

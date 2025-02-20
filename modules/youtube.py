@@ -1,5 +1,7 @@
 import json
 import logging
+import os
+from typing import List
 
 from requests import api
 from requests.exceptions import RequestException
@@ -7,6 +9,9 @@ from youtube_transcript_api import (
     CouldNotRetrieveTranscript,
     Transcript,
     YouTubeTranscriptApi,
+    NoTranscriptFound,
+    TranscriptsDisabled,
+    TranslationLanguageNotAvailable
 )
 from youtube_transcript_api.formatters import TextFormatter
 
@@ -31,56 +36,133 @@ class NoTranscriptReceivedException(Exception):
 
 
 class InvalidUrlException(Exception):
-    def __init__(self, message: str, url: str):
-        self.message = message
+    def __init__(self, url, message="Invalid YouTube URL"):
         self.url = url
+        self.message = message
         super().__init__(self.message)
 
     def log_error(self):
         """Provides error context for developers."""
-        logging.error("Could not extract video_id from %s", self.url)
+        logging.error(f"{self.message}: {self.url}")
 
 
-def get_video_metadata(url: str):
-    if not ("youtube.com" in url or "youtu.be" in url):
-        raise InvalidUrlException(
-            "Seems not to be a YouTube URL :confused: If you are convinced that it's a YouTube URL, report the bug.",
-            url,
-        )
+def get_video_metadata(url: str) -> dict:
+    """
+    Fetches metadata for a YouTube video using yt-dlp.  Requires yt-dlp to be installed.
 
+    Args:
+        url: The URL of the YouTube video.
+
+    Returns:
+        A dictionary containing the video's metadata, or None if an error occurs.
+        The dictionary will have the keys "name" (video title) and "channel".
+
+    Raises:
+        InvalidUrlException: If the URL is invalid.
+    """
     try:
-        response = api.get(OEMBED_PROVIDER, params={"url": url}, timeout=5)
-    except RequestException as e:
-        logging.warning("Can't retrieve metadata for provided video URL: %s", {str(e)})
-        return None
-    else:
-        json_response = json.loads(response.text)
-        return {
-            "name": json_response["title"],
-            "channel": json_response["author_name"],
-            "provider_name": json_response["provider_name"],
-        }
+        video_id = extract_youtube_video_id(url)
+        if not video_id:
+            raise InvalidUrlException(url)
+
+        # Use yt-dlp to get video information.  This is more reliable than parsing HTML.
+        # The command is: yt-dlp --dump-json --skip-download <video_url>
+        command = ["yt-dlp", "--dump-json", "--skip-download", url]
+
+        # Execute the command and capture the output
+        import subprocess
+        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        video_info = result.stdout
+
+        # Parse the JSON output
+        import json
+        video_info_json = json.loads(video_info)
+
+        # Extract the title and channel
+        video_title = video_info_json.get('title')
+        channel_name = video_info_json.get('channel')
+
+        if video_title and channel_name:
+            return {"name": video_title, "channel": channel_name}
+        else:
+            logging.error("Could not retrieve video title and channel from yt-dlp output.")
+            return {"name": "Unknown Title", "channel": "Unknown Channel"} # Return default values
+
+    except subprocess.CalledProcessError as e:
+        logging.error("Error running yt-dlp: %s", e)
+        return {"name": "Unknown Title", "channel": "Unknown Channel"}  # Return default values on error
+    except json.JSONDecodeError as e:
+        logging.error("Error parsing yt-dlp output: %s", e)
+        return {"name": "Unknown Title", "channel": "Unknown Channel"}  # Return default values on error
+    except InvalidUrlException:
+        raise
+    except Exception as e:
+        logging.error("An unexpected error occurred: %s", e)
+        return {"name": "Unknown Title", "channel": "Unknown Channel"}  # Return default values on error
 
 
-def fetch_youtube_transcript(url: str):
-    """Fetches the transcript of a YouTube video. Returns transcript text."""
+def fetch_youtube_transcript(url: str) -> str:
+    """
+    Fetches the transcript for a YouTube video.
 
-    video_id = extract_youtube_video_id(url)
-    if video_id is None:
-        raise InvalidUrlException(
-            "Something is wrong with the URL :confused:", video_id
-        )
+    Args:
+        url: The URL of the YouTube video.
 
+    Returns:
+        The transcript as a single string.
+
+    Raises:
+        InvalidUrlException: If the URL is not a valid YouTube URL.
+        NoTranscriptReceivedException: If no transcript could be retrieved.
+        Exception: For other errors during transcript retrieval.
+    """
     try:
-        transcript = YouTubeTranscriptApi.get_transcript(
-            video_id, languages=get_preffered_languages()
-        )
-    except CouldNotRetrieveTranscript as e:
-        logging.error("Failed to retrieve transcript for URL: %s", str(e))
+        video_id = extract_youtube_video_id(url)
+        if not video_id:
+            raise InvalidUrlException(url)
+
+        preferred_languages = get_preffered_languages()
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+
+        try:
+            # Try to get a manually created transcript in a preferred language
+            transcript = transcript_list.find_transcript(preferred_languages)
+            transcript_text = " ".join([part["text"] for part in transcript.fetch()])
+            return transcript_text
+
+        except NoTranscriptFound:
+            # If no manually created transcript is found, try auto-generated transcripts
+            for transcript in transcript_list:
+                if transcript.is_generated and transcript.language_code in preferred_languages:
+                    transcript_text = " ".join([part["text"] for part in transcript.fetch()])
+                    return transcript_text
+
+                # If not in preferred languages, try to translate
+                if transcript.is_translatable:
+                    for language in preferred_languages:
+                        try:
+                            translated_transcript = transcript.translate(language)
+                            transcript_text = " ".join([part["text"] for part in translated_transcript.fetch()])
+                            return transcript_text
+                        except TranslationLanguageNotAvailable:
+                            logging.warning(f"Translation to {language} not available for video {video_id}")
+                            continue # Try the next preferred language
+
+            # If no usable transcript found, raise the exception
+            raise NoTranscriptReceivedException(url)
+
+
+        except Exception as e:
+            logging.error("An error occurred while fetching the transcript: %s", e)
+            raise
+
+    except TranscriptsDisabled:
         raise NoTranscriptReceivedException(url)
-    else:
-        formatter = TextFormatter()
-        return formatter.format_transcript(transcript)
+    except InvalidUrlException:
+        raise
+    except Exception as e:
+        logging.error("An unexpected error occurred: %s", e)
+        raise
 
 
 def analyze_transcripts(video_id: str):

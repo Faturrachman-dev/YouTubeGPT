@@ -7,20 +7,21 @@ from langchain.chains.summarize import load_summarize_chain
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.documents import Document
+import tiktoken  # Import tiktoken here
 
 from modules.helpers import (
     count_tokens,
     get_default_config_value,
 )
 
-# Constants for chunking
-INITIAL_CHUNK_SIZE = 16000  # Try a larger initial chunk size
-OVERLAP_SIZE = 1000  # Keep some overlap
+# Constants for chunking (removed fixed sizes)
+# INITIAL_CHUNK_SIZE = 16000  # Removed
+# OVERLAP_SIZE = 1000  # Removed
 
 # Define NVIDIA_CONTEXT_WINDOWS here
 NVIDIA_CONTEXT_WINDOWS = {
-    "meta/llama-3.1-405b-instruct": 8192,  # Example value - ADJUST AS NEEDED!
-    "mixtral_8x7b": 32768, # Example value - ADJUST AS NEEDED!
+    "meta/llama-3.1-405b-instruct": 8192,
+    "mixtral_8x7b": 32768,
     "nemotron_340b" : 4096
 }
 
@@ -36,55 +37,91 @@ class TranscriptTooLongForModelException(Exception):
         logging.error(self.message)
 
 
-def get_transcript_summary(transcript_text: str, llm, custom_prompt: str = None):
-    """Gets a summary of a transcript using the map-reduce method.
-    DEPRECATED: Use summarize_with_refined_prompt instead.
+def get_transcript_summary(transcript_text: str, llm) -> str:
     """
-    logging.warning("get_transcript_summary is deprecated. Use summarize_with_refined_prompt instead.")
-    prompt_template = """Write a concise summary of the following:
-    "{text}"
-    CONCISE SUMMARY:"""
+    Generates a summary of a video transcript using a Refine prompt.
 
-    if custom_prompt:
-        prompt_template = custom_prompt + '\n"""\n{text}\n"""\nCONCISE SUMMARY:'
+    Args:
+        transcript_text (str): The full text of the video transcript.
 
-    prompt = PromptTemplate(template=prompt_template, input_variables=["text"])
-    summary_chain = load_summarize_chain(
-        llm, chain_type="map_reduce", map_prompt=prompt, combine_prompt=prompt
-    )
-    return summary_chain.invoke(transcript_text)
+    Returns:
+        str: A concise summary of the video.
+    """
+    # This function is no longer used, but I'm keeping it here
+    # in case you want to revert to a simpler summarization approach.
+    # The actual summarization logic is now entirely within
+    # summarize_with_refined_prompt.
+    raise NotImplementedError("get_transcript_summary is not currently used.")
 
-def create_chunks(text: str, chunk_size: int, overlap: int) -> List[str]:
-    """Splits text into chunks with specified size and overlap."""
+
+def split_text_into_chunks(text: str, model_name: str, chunk_size: int, overlap: int) -> List[str]:
+    """
+    Splits the given text into chunks based on token count, with overlap.
+
+    Args:
+        text: The text to split.
+        model_name: The name of the model (for tokenization).
+        chunk_size: The *token* size of each chunk.
+        overlap: The *token* overlap between chunks.
+
+    Returns:
+        A list of text chunks.
+    """
+    try:
+        encoding = tiktoken.encoding_for_model(model_name)
+    except KeyError:
+        encoding = tiktoken.get_encoding("cl100k_base")  # Default
+
+    tokens = encoding.encode(text)
     chunks = []
     start = 0
-    while start < len(text):
-        end = min(start + chunk_size, len(text))
-        chunks.append(text[start:end])
+    while start < len(tokens):
+        end = min(start + chunk_size, len(tokens))
+        chunk_tokens = tokens[start:end]
+        chunk_text = encoding.decode(chunk_tokens)
+        chunks.append(chunk_text)
         start += chunk_size - overlap
+        # Prevent infinite loop in edge cases
+        if start + overlap >= end and end < len(tokens):
+            start = end
+
     return chunks
 
-def summarize_with_refined_prompt(transcript_text: str, llm, custom_prompt: str = None):
-    """Summarizes a transcript using a refined prompting strategy and chunking."""
 
-    model_name = llm.model  # Get the model name from the llm object
-    model_context_window = NVIDIA_CONTEXT_WINDOWS.get(model_name)
-    if model_context_window is None:
-        raise ValueError(f"Context window size not defined for model: {model_name}")
+def summarize_with_refined_prompt(transcript_text: str, llm, custom_prompt: str = None) -> str:
+    """
+    Summarizes a transcript using a refined prompting strategy with map-reduce.  Handles long transcripts.
 
-    # Check if the ENTIRE transcript fits within the model's context window
-    num_tokens = count_tokens(transcript_text, model_name)
-    logging.info(f"Number of tokens in transcript: {num_tokens}")
+    Args:
+        transcript_text: The transcript text.
+        llm: The language model.
+        custom_prompt:  An optional custom prompt.
 
-    if num_tokens > model_context_window:
-        initial_chunk_size = model_context_window - OVERLAP_SIZE  # Ensure chunks fit
-        overlap_size = OVERLAP_SIZE
-    else:  # If it fits, just summarize it directly.  No chunking needed.
-        initial_chunk_size = model_context_window
-        overlap_size = 0
+    Returns:
+        The summary.
+    """
 
-    chunks = create_chunks(transcript_text, initial_chunk_size, overlap_size)
-    logging.info(f"Number of chunks created: {len(chunks)}")
+    # --- Adaptive Chunking ---
+    model_name = llm.model  # CORRECTED model name access (again!)
+    if model_name not in NVIDIA_CONTEXT_WINDOWS:
+        raise ValueError(f"Model name '{model_name}' is not supported.")
+
+    context_window = NVIDIA_CONTEXT_WINDOWS[model_name]
+    # Use a smaller fraction to leave room for the prompt and summary
+    initial_chunk_size = int(context_window * 0.4)  # 40% for chunks
+    overlap_size = int(initial_chunk_size * 0.1)  # 10% overlap
+
+    chunks = split_text_into_chunks(transcript_text, model_name, initial_chunk_size, overlap_size)
+    logging.info(f"Initial chunk size: {initial_chunk_size}, overlap: {overlap_size}")
+    logging.info(f"Number of chunks: {len(chunks)}")
+    total_tokens = count_tokens(transcript_text, model_name) # Count tokens *once*
+    logging.info(f"Total tokens in transcript: {total_tokens}")
+
+    if total_tokens > context_window:
+        raise TranscriptTooLongForModelException(
+            f"Transcript is too long for the selected model ({model_name}).  Total tokens: {total_tokens}, context window: {context_window}."
+        )
+    # --- End Adaptive Chunking ---
 
     # --- Refined Prompting ---
     if custom_prompt:
